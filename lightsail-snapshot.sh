@@ -15,6 +15,14 @@ function usage() {
     " 1>&2; exit 1;
 }
 
+function isRoot() {
+    if [ "$(whoami)" != 'root' ]; then
+        return 1
+    else 
+        return 0
+    fi
+}
+
 function log() {
     echo LOG: "$@" >> $LOG_FILE
     if [ ! "$SILENT" ]; then
@@ -140,6 +148,9 @@ if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
     EMAIL=true
 fi
 
+if ! isRoot ;then
+    error_exit "this script must be run as root"
+fi
 
 if touch "$LOG_FILE" 2>/dev/null ;then
     exec 2>>$LOG_FILE

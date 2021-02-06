@@ -4,7 +4,7 @@
 #   awscli
 #   if using email alerts the account must be configured for SES and you must use validated email addresses
 
-trap "error_exit process terminated" SIGTERM SIGINT SIGQUIT SIGKILL
+trap "errorExit process terminated" SIGTERM SIGINT SIGQUIT SIGKILL
 
 function usage() {
     echo "Usage: $SCRIPT  -l log file -b basename -m max snapshots -i lightsail instance name -a aws profile [ -s (silent) ] [ -f email from -t  email to ]
@@ -30,7 +30,7 @@ function log() {
     fi
 }
 
-function error_exit() {
+function errorExit() {
     echo "ERROR: $@" >> $LOG_FILE
     exec 2>&2
     echo "$SCRIPT: ERROR: $@" 
@@ -42,15 +42,15 @@ function error_exit() {
     exit -1
 }
 
-function delete_snapshot() {
+function deleteSnapshot() {
      aws lightsail delete-instance-snapshot --instance-snapshot $1 --output json  --profile $AWS_PROFILE  >> $LOG_FILE
 }
 
-function create_snapshot() {
+function createSnapshot() {
      aws lightsail create-instance-snapshot --instance-name $1 --instance-snapshot-name $2 --output json --profile $AWS_PROFILE >> $LOG_FILE
 }
 
-function pending_snapshots() {
+function pendingSnapshots() {
     aws lightsail get-instance-snapshots --output yaml --profile Admin |grep pending >/dev/null 
 }
 
@@ -58,7 +58,7 @@ function email(){
     aws ses send-email --from $FROM_EMAIL --subject "$@" --text "see $LOG_FILE for more info"  --to $TO_EMAIL --profile $AWS_PROFILE >/dev/null
 }
 
-function snapshot_query() {
+function snapshotQuery() {
     gawk ' BEGIN { 
         ct=0 
         name="name"
@@ -123,6 +123,7 @@ function snapshot_query() {
 
 # main
 export SCRIPT=$(basename $0)
+
 while getopts "l:b:i:m:a:f:t:s" o; do
         case "$o" in
         s) SILENT=true ;; # disable screen output
@@ -149,7 +150,7 @@ if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
 fi
 
 if ! isRoot ;then
-    error_exit "this script must be run as root"
+    errorExit "this script must be run as root"
 fi
 
 if touch "$LOG_FILE" 2>/dev/null ;then
@@ -164,17 +165,17 @@ DATE=$(date '+%Y-%m-%d %H:%M:%S')
 echo "============================================" >>$LOG_FILE
 log $(printf "%s %s starting" "$DATE" "$SCRIPT")
 
-if pending_snapshots ; then
-     error_exit "snapshot already in progress. Exiting" 
+if pendingSnapshots ; then
+     errorExit "snapshot already in progress. Exiting" 
 fi
 
-SNAPSHOT_COUNT=$(aws lightsail get-instance-snapshots --profile $AWS_PROFILE --output yaml|snapshot_query count $LOG_FILE)
+SNAPSHOT_COUNT=$(aws lightsail get-instance-snapshots --profile $AWS_PROFILE --output yaml|snapshotQuery count $LOG_FILE)
 log "$SNAPSHOT_COUNT matching snapshots found (max allowed = $MAX_SNAPSHOTS)" 
 
 NEW_SNAPSHOT=${SNAPSHOT_BASE_NAME}-"$(date '+%Y-%m-%dT%H-%M-%S')"
 log "creating a new snapshot $NEW_SNAPSHOT" 
-if ! create_snapshot $INSTANCE_NAME $NEW_SNAPSHOT; then
-       error_exit "could not create snapsnot $NEW_SNAPSHOT of $INSTANCE_NAME"
+if ! createSnapshot $INSTANCE_NAME $NEW_SNAPSHOT; then
+       errorExit "could not create snapsnot $NEW_SNAPSHOT of $INSTANCE_NAME"
 fi
 
 if [ "$SNAPSHOT_COUNT" -ge "$MAX_SNAPSHOTS" ];then
@@ -183,10 +184,10 @@ if [ "$SNAPSHOT_COUNT" -ge "$MAX_SNAPSHOTS" ];then
     ct=0
     SNAPSHOT=""
     while [ $ct -lt $nuber_of_deletions ];do
-        SNAPSHOT=$(aws lightsail get-instance-snapshots --profile $AWS_PROFILE --output yaml|snapshot_query oldest)  
+        SNAPSHOT=$(aws lightsail get-instance-snapshots --profile $AWS_PROFILE --output yaml|snapshotQuery oldest)  
         log "deleting snapshot : $SNAPSHOT "
-        if ! delete_snapshot "$SNAPSHOT"; then
-            error_exit "delete snapshot failed on: $SNAPSHOT "
+        if ! deleteSnapshot "$SNAPSHOT"; then
+            errorExit "delete snapshot failed on: $SNAPSHOT "
         fi
         let ct=ct+1
     done
@@ -195,6 +196,6 @@ log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT completed"
 
 if [ "$EMAIL" ];then
     if ! email "$SCRIPT: completed without errors" ; then
-        error_exit "could not send email"
+        errorExit "could not send email"
     fi
 fi

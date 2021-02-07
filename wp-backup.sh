@@ -4,13 +4,13 @@
 trap "errorExit process terminated" SIGTERM SIGINT SIGQUIT SIGKILL
 
 function usage() {
-    echo "Usage: $SCRIPT  -l log file -w wordpress dir -b backup dir 
+    echo "Usage: $SCRIPT  -l log file -w wordpress dir -b backup dir -m days (max daily backups to retain)
         [ -s (silent) ] 
         [ -p passphrase ] (when specified this will be used as a key to encrypt the systems archive )
         [ -f email from -t email to ]
 
         e.g:
-        $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress
+        $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -m 7
         " 1>&2; exit 1;
 }
 
@@ -56,6 +56,7 @@ function createContentArchive() {
     # backup the user content directory
     tar czf $CONTENT_ARCHIVE_FILE --transform="s,${WP_ROOT_DIR#/}/,,"  $WP_ROOT_DIR/wp-content
 }
+
 function createSystemArchive() {
     # backup the system files
     tar czf $SYSTEM_ARCHIVE_FILE --transform="s,${WP_ROOT_DIR#/}/,," --exclude $WP_ROOT_DIR/wp-content $WP_ROOT_DIR 
@@ -65,12 +66,35 @@ function createSystemArchive() {
     fi
 }
 
+
+function daysBetween() {
+	date1=$( date '+%s' -d $1)
+	date2=$( date '+%s' -d $2)
+	s=$((date1 - date2))
+	echo $((s/86400))
+}
+
+# removes all directories older than max retention days
+function deleteOldestDailyBackups() {
+	for d in ${BACKUP_ROOT_DIR}/????-??-??/ ; do
+	    BACKUP_DATE=$(basename $d)
+	    if [ $( daysBetween $DATE $BACKUP_DATE ) -ge $MAX_DAYS_TO_RETAIN ] ;then  
+		log "removing $d"
+		if ! rm -rf $d ; then
+			errorExit "error could not remove $d"
+		fi
+	    fi
+	done
+}
+
 # main
+
 export SCRIPT=$(basename $0)
-while getopts "sw:l:b:t:f:p:" o; do
+while getopts "sw:l:b:t:f:p:m:" o; do
         case "$o" in
         s) SILENT=true ;; # disable screen output
         l) LOG_FILE=$OPTARG ;; 
+        m) MAX_DAYS_TO_RETAIN=$OPTARG ;; 
         b) BACKUP_ROOT_DIR=${OPTARG%/} ;; 
         f) FROM_EMAIL=$OPTARG ;;
         t) TO_EMAIL=$OPTARG ;;
@@ -80,7 +104,7 @@ while getopts "sw:l:b:t:f:p:" o; do
         esac
 done
 
-if [ ! "$LOG_FILE" ] || [ ! "$WP_ROOT_DIR" ]  || [ ! "$BACKUP_ROOT_DIR" ]; then
+if [ ! "$LOG_FILE" ] || [ ! "$WP_ROOT_DIR" ]  || [ ! "$BACKUP_ROOT_DIR" ] || [ ! $MAX_DAYS_TO_RETAIN ]; then
     usage
 fi
 
@@ -103,7 +127,6 @@ else
     exit -1
 fi
 
-DT=$(date '+%Y-%m-%d %H:%M:%S')
 DATE=$(date '+%Y-%m-%d')
 
 WP_CONFIG_FILE="${WP_ROOT_DIR}/wp-config.php"
@@ -131,7 +154,7 @@ CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz
 SYSTEM_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-system.tar.gz 
 
 echo "============================================" >>$LOG_FILE
-log $(printf "%s %s starting" "$DT" "$SCRIPT")
+log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT starting"
 
 
 log "Creating database archive: $DATABASE_ARCHIVE_FILE"
@@ -148,6 +171,9 @@ log "Creating system archive: $SYSTEM_ARCHIVE_FILE"
 if ! createSystemArchive ; then
     errorExit "could not create system archive"
 fi
+
+log "removing daily backups older than $MAX_DAYS_TO_RETAIN days old"
+deleteOldestDailyBackups
 
 log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT completed"
 if [ "$EMAIL" ];then

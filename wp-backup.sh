@@ -1,17 +1,47 @@
-#!/bin/bash
-# back up wordpress database and files
+#!/usr/bin/env bash
+# see https://github.com/nickabs/lightsail-utils
 
-trap "errorExit process terminated" SIGTERM SIGINT SIGQUIT SIGKILL
+set -o pipefail
+# ERR trap for subshells
+set -o errtrace 
+trap "errorExit process terminated" SIGTERM SIGINT SIGQUIT SIGKILL ERR
 
 function usage() {
     echo "Usage: $SCRIPT  -l log file -w wordpress dir -b backup dir -m days (max daily backups to retain)
-        [ -s (silent) ] 
+        [ -s (silent) ]
         [ -p passphrase ] (when specified this will be used as a key to encrypt the systems archive )
-        [ -f email from -t email to ]
+        [ -f email from -t email to -a aws profile name ]
+		[ -r remote storage -g google drive id -c credential json file for service account]
+		when specifying remote storage the backups are managed in the specified google drive and the local copy is deleted.
 
         e.g:
-        $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -m 7
+        $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f lightsail-snapshot@smallworkshop.co.uk -t nick.abson@googlemail.com -a LightsailSnapshotAdmin
         " 1>&2; exit 1;
+}
+
+function checkOptions() {
+		if [ ! "$LOG_FILE" ] || [ ! "$WP_ROOT_DIR" ]  || [ ! "$BACKUP_ROOT_DIR" ] || [ ! $MAX_DAYS_TO_RETAIN ]; then
+			return 1
+		fi
+
+		if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
+			if [ ! "$FROM_EMAIL" ] || [ ! "$TO_EMAIL" ]; then
+				echo "specify both from and to emails" >&2
+				return 1
+			fi
+			if [ ! "$AWS_PROFILE" ]; then
+				echo "specify an AWS CLI profile when using the email option" >&2
+				return 1
+			fi
+			EMAIL=true
+		fi
+
+		if [ "$REMOTE" ];then
+			if [ -z "$REMOTE_ROOT_DIR_ID" ] || [ -z "$SERVICE_ACCOUNT_CREDENTIALS_FILE" ];then
+				echo "please specify the remote root directory id and a service account credentials file when using remote storage" >&2
+				return 1
+			fi
+		fi
 }
 
 function isRoot() {
@@ -21,36 +51,63 @@ function isRoot() {
 }
 
 function log() {
-    echo LOG: "$@" >> $LOG_FILE
-    if [ ! "$SILENT" ]; then
-        echo LOG: "$@"
+	echo LOG: "$@" >> $LOG_FILE
+	if [ ! "$SILENT" ]; then
+		echo LOG: "$@"
     fi
 }
 
 function errorExit() {
-    echo "ERROR: $@" >> $LOG_FILE
-    exec 2>&2
-    echo "$SCRIPT: ERROR: $@" 
+	local exit_status=$?
+    echo "ERROR: $@ with $exit_status" >> $LOG_FILE
+	if [ "$REMOTE" ]; then
+		log "cleaning up local backup files from $BACKUP_DIR"
+		rm -rf $BACKUP_DIR
+	fi
+    echo "$SCRIPT: ERROR: $@ with $exit_status" 
     if [ "$EMAIL" ];then
-        if ! email "$SCRIPT: FAILED" ; then
-            echo "$SCRIPT: ERROR: could not send email" 2>&1
+		if ! email "$SCRIPT: ERROR" ; then
+			echo "$SCRIPT: ERROR: could not send email" 2>&1
         fi
     fi
-    exit -1
+	exit 
 }
 
+function completionMessages() {
+	local msg
+	if [ $WARNING_FLAG ]; then
+		msg="$SCRIPT: WARNING: completed with errors"
+		log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT completed with warnings"
+	else
+		msg="$SCRIPT: completed"
+		log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT completed"
+	fi
+
+   	if [ "$EMAIL" ];then
+		if ! email "$msg"; then
+			errorExit "could not send email"
+		fi
+	fi
+}
+
+function email() { aws ses send-email --from $FROM_EMAIL --subject "$@" --text "see $LOG_FILE for more info"  --to $TO_EMAIL --profile $AWS_PROFILE >/dev/null ; }
+
+function daysBetween() {
+	date1=$( date '+%s' -d $1)
+	date2=$( date '+%s' -d $2)
+	s=$((date1 - date2))
+	echo $((s/86400))
+}
 
 function createDatabaseArchive() {
-    db_name=$((grep DB_NAME | cut -d \' -f 4) < $WP_CONFIG_FILE)
-    user=$((grep DB_USER | cut -d \' -f 4) < $WP_CONFIG_FILE)
-    host=$((grep DB_HOST | cut -d \' -f 4) < $WP_CONFIG_FILE)
+	local db_name=$(gawk 'BEGIN {RS=";" } /DB_NAME/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
+	local user=$(gawk 'BEGIN {RS=";" } /DB_USER/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
+	local host=$(gawk 'BEGIN {RS=";" } /DB_HOST/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
 
-    # avoids supplying password on command line
-    export MYSQL_PWD=$((grep DB_PASSWORD | cut -d \' -f 4) < $WP_CONFIG_FILE)
-
+    # setting this env variable avoids supplying password on command line
+    export MYSQL_PWD=$(gawk 'BEGIN {RS=";" } /DB_PASSWORD/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
 	mysqldump --no-tablespaces --user=$user --host=$host $db_name  | gzip > $DATABASE_ARCHIVE_FILE
 }
-
 
 function createContentArchive() {
     # backup the user content directory
@@ -66,54 +123,231 @@ function createSystemArchive() {
     fi
 }
 
-
-function daysBetween() {
-	date1=$( date '+%s' -d $1)
-	date2=$( date '+%s' -d $2)
-	s=$((date1 - date2))
-	echo $((s/86400))
-}
-
 # removes all directories older than max retention days
-function deleteOldestDailyBackups() {
+function deleteOldestDailyBackupsLocal() {
+	local backup_date
 	for d in ${BACKUP_ROOT_DIR}/????-??-??/ ; do
-	    BACKUP_DATE=$(basename $d)
-	    if [ $( daysBetween $DATE $BACKUP_DATE ) -ge $MAX_DAYS_TO_RETAIN ] ;then  
-		log "removing $d"
-		if ! rm -rf $d ; then
-			errorExit "error could not remove $d"
-		fi
+	    backup_date=$(basename $d)
+	    if [ $( daysBetween $DATE $backup_date ) -ge $MAX_DAYS_TO_RETAIN ] ;then  
+			log "removing $d"
+				if ! rm -rf $d ; then
+					errorExit "error could not remove $d"
+				fi
 	    fi
 	done
 }
 
-# main
 
+function deleteOldestDailyBackupsRemote() {
+	local folders folder backup_date backup_id
+	# find folders named YYYY-MM-DD
+	readarray -t folders < <(gdriveListFiles $REMOTE_ROOT_DIR_ID "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]" application/vnd.google-apps.folder)
+	if [ -z "$folders" ]; then
+		log "no backup folders found older than $MAX_DAYS_TO_RETURN"
+		return
+	fi
+
+	for folder in "${folders[@]}"
+	do
+		backup_date=$( echo $folder | gawk '{ print $3 }')
+		backup_id=$( echo $folder | gawk '{ print $1 }')
+	   	if [ $( daysBetween $DATE $backup_date ) -ge $MAX_DAYS_TO_RETAIN ] ;then  
+			if gdriveDeleteFile $backup_id ; then
+				log "removing remote folder: \"$backup_date\" id=\"$backup_id\""
+			else
+				log "WARNING: could not delete folder $i from backup root directory $REMOTE_ROOT_DIR_ID"
+				WARNING_FLAG=true
+			fi
+		fi
+	done
+}
+
+	    
+function getGoogleAccessToken() { 
+	local jwt_header=$(jwtHeader)
+	local jwt_header_b64="$(echo -n "$jwt_header" | base64Encode)"
+
+	local jwt_payload=$(jwtPayload)
+	local jwt_payload_b64="$(echo -n "$jwt_payload" | base64Encode)"
+
+	local unsigned_jwt="$jwt_header_b64.$jwt_payload_b64"
+
+	local signature=$(echo -n "$unsigned_jwt" | signature | base64Encode)
+
+	local jwt_assertion="${jwt_header_b64}.${jwt_payload_b64}.${signature}"
+
+	# retrieve access token
+	local response=$(curl --silent --data "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=$jwt_assertion" https://oauth2.googleapis.com/token )
+	local at=$(echo "$response"|jq -r '.access_token')
+	if [ -z "$at" ] || [ "$at" = "null" ];then
+	 	echo "ouath error: " $(echo  "$response"|jq -r '.error_description' ) >&2
+		return 1
+	else
+		echo $at	
+	fi
+}
+
+function jwtHeader() { echo '{"alg":"RS256","typ":"JWT"}' ; }
+
+function jwtPayload() { 
+	local iat=$(date '+%s')
+	local exp=$(($iat + 3600))
+
+	cat  <<!
+	{
+		"iss": "$SERVICE_ACCOUNT_EMAIL",
+		"scope": "https://www.googleapis.com/auth/drive.file",
+		"aud": "https://oauth2.googleapis.com/token",
+		"exp": $exp,
+		"iat": $iat
+	}
+!
+}
+
+function base64Encode() { openssl enc -base64 -A | tr '+/' '-_' | tr -d '=' ; }
+
+function signature() { openssl dgst -binary -sha256 -sign <(jq -r '.private_key' < $SERVICE_ACCOUNT_CREDENTIALS_FILE ) ; }
+
+# $1 = file id
+# no output
+function gdriveDeleteFile() {
+	local response="$(curl --silent \
+	--request DELETE \
+	--header "Authorization: Bearer $AT" \
+	--header 'Accept: application/json' \
+	https://www.googleapis.com/drive/v3/files/$1
+	)"
+	if echo $response | gdriveCheckForErrors  ; then
+		return 1 
+	fi
+}
+
+# $1 parent folder id $2 folder name
+# prints id of created folder and returns zero if successful
+function gdriveCreateFolder() {
+	local response="$(
+		curl --silent \
+		--header "Authorization: Bearer $AT" \
+		--header 'Content-Type: application/json'  \
+		--header 'Accept: application/json' \
+		--data "{
+			\"name\": \"$2\",
+			\"mimeType\": \"application/vnd.google-apps.folder\",
+			\"parents\": [ \"$1\" ]
+		}"  \
+		https://www.googleapis.com/drive/v3/files
+	)"
+	if echo $response | gdriveCheckForErrors  ; then
+		return 1 
+	else
+		echo $response |jq -r '.id'
+	fi
+}
+
+# $1 = parent dir $2 = regex match pattern [ $3 = mimeType ]
+# prints id mimeType name for files matching the regex
+function gdriveListFiles() {
+
+	if [ ! -z "$3" ];then
+		local m=" and mimeType=\"$3\" "
+	fi
+	local response="$(curl --silent \
+	--get https://www.googleapis.com/drive/v3/files?orderBy=name \
+	--header "Authorization: Bearer $AT" \
+	--header 'Accept: application/json' \
+	--data-urlencode "q=parents in \"$1\" $m"
+	)"
+
+	if echo $response | gdriveCheckForErrors  ; then
+		return 1 
+	else
+		echo "$response" |jq -r ".files[] | .id + \" \" + .mimeType + \" \" + .name | select(test(\"$2\"))"  
+	fi
+}
+
+# returns true if http error code found in response and prints error message to STDERR
+function gdriveCheckForErrors() {
+	local e=$(jq -r '"\(.error.code)"+" "+.error.message')
+
+	if [ -z "$e" ] || [[ "$e" =~ ^null ]]; then
+		return  1 # no error found
+	else
+		echo $e >&2
+	fi
+}
+
+function gdriveUploadFile() {
+	# random string to delimit sections in multipart data 
+	local boundary="boundary_7a4cd99a13eaf0b5b10798a"
+	local file="$1"
+	local filename="$(basename $1)"
+	local parent_id="$2"
+	local mimeType="$3"
+
+	response=$( 
+	( cat  <<-! && cat $file && echo -en "\n\n--$boundary--\n" ) \
+		|curl --silent \
+		--request POST \
+		--header "Authorization: Bearer $AT" \
+		--header "Content-Type: multipart/related; boundary=$boundary" \
+		--header "Cache-Control: no-cache" \
+		--header "Tranfer-Encoding: chunked" \
+		--upload-file - \
+		"https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart" 
+	--$boundary
+	Content-Type: application/json; charset=UTF-8
+
+	{ 
+		"name": "$filename",
+		"parents": ["$parent_id"] 
+	}
+
+	--$boundary
+	Content-Type: $mimeType
+
+!
+)
+	if echo $response | gdriveCheckForErrors  ; then
+		return 1 
+	else
+		echo $response |jq -r '.id'
+	fi
+}
+
+function gdriveShowQuotaUsage() {
+	local response=$(curl --silent \
+	  'https://www.googleapis.com/drive/v3/about?fields=storageQuota' \
+	  --header "Authorization: Bearer $AT" \
+	  --header 'Accept: application/json' )
+	if echo $response | gdriveCheckForErrors  ; then
+		return 1 
+	else
+		echo $response| jq -r '"limit: " +.storageQuota.limit + " usage:"+ .storageQuota.usage'
+	fi
+}
+
+# main
 export SCRIPT=$(basename $0)
-while getopts "sw:l:b:t:f:p:m:" o; do
+while getopts "rsw:l:b:t:f:p:m:g:c:a:" o; do
         case "$o" in
-        s) SILENT=true ;; # disable screen output
-        l) LOG_FILE=$OPTARG ;; 
-        m) MAX_DAYS_TO_RETAIN=$OPTARG ;; 
-        b) BACKUP_ROOT_DIR=${OPTARG%/} ;; 
-        f) FROM_EMAIL=$OPTARG ;;
-        t) TO_EMAIL=$OPTARG ;;
-        w) WP_ROOT_DIR=${OPTARG%/} ;;
-        p) PASSPHRASE=$OPTARG ;;
+        s) export SILENT=true ;; # disable screen output
+        l) export LOG_FILE=$OPTARG ;; 
+        m) export MAX_DAYS_TO_RETAIN=$OPTARG ;; 
+        b) export BACKUP_ROOT_DIR=${OPTARG%/} ;; 
+        f) export FROM_EMAIL=$OPTARG ;;
+        t) export TO_EMAIL=$OPTARG ;;
+        a) export AWS_PROFILE=$OPTARG ;;
+        w) export WP_ROOT_DIR=${OPTARG%/} ;;
+        p) export PASSPHRASE=$OPTARG ;;
+		g) export REMOTE_ROOT_DIR_ID=$OPTARG;; # google drive folder id
+		c) export SERVICE_ACCOUNT_CREDENTIALS_FILE=$OPTARG;; # service account credentials file from https://console.developers.google.com/
+		r) export REMOTE=true ;;
         *) usage ;;
         esac
 done
 
-if [ ! "$LOG_FILE" ] || [ ! "$WP_ROOT_DIR" ]  || [ ! "$BACKUP_ROOT_DIR" ] || [ ! $MAX_DAYS_TO_RETAIN ]; then
-    usage
-fi
-
-if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
-    if [ ! "$FROM_EMAIL" ] || [ ! "$TO_EMAIL" ]; then
-        echo "specify both from and to emails" >&2
-        usage
-    fi
-    EMAIL=true
+if ! checkOptions ; then
+	usage
 fi
 
 if ! isRoot ;then
@@ -127,12 +361,14 @@ else
     exit -1
 fi
 
+#env
+export WARNING_FLAG
 DATE=$(date '+%Y-%m-%d')
 
 WP_CONFIG_FILE="${WP_ROOT_DIR}/wp-config.php"
 
-if [ ! -r $CONFIG_FILE ]; then
-    errorExit "Can't read WP config file: $CONFIG_FILE"
+if [ ! -r $WP_CONFIG_FILE ]; then
+    errorExit "Can't read WP config file: $WP_CONFIG_FILE"
 fi
 
 if [ ! -w $BACKUP_ROOT_DIR ]; then
@@ -149,13 +385,27 @@ if ! mkdir $BACKUP_DIR ; then
     errorExit "can't create backup directory: $BACKUP_DIR"
 fi
 
+if [ "$REMOTE" ]; then
+	if [ ! -r "$SERVICE_ACCOUNT_CREDENTIALS_FILE" ] ; then
+		errorExit "can't open credentials file: $SERVICE_ACCOUNT_CREDENTIALS_FILE"
+	fi
+
+	export SERVICE_ACCOUNT_EMAIL=$(jq -r ".client_email" < "$SERVICE_ACCOUNT_CREDENTIALS_FILE") 
+	if [ -z "$SERVICE_ACCOUNT_EMAIL" ];then
+		errorExit "can't read client_email from : $SERVICE_ACCOUNT_CREDENTIALS_FILE"
+	fi
+	export AT
+	if ! AT=$(getGoogleAccessToken) ;then
+		errorExit "could not get access token"
+	fi
+fi
+
 DATABASE_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-database.sql.gz 
 CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz 
 SYSTEM_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-system.tar.gz 
 
 echo "============================================" >>$LOG_FILE
 log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT starting"
-
 
 log "Creating database archive: $DATABASE_ARCHIVE_FILE"
 if ! createDatabaseArchive ; then
@@ -172,12 +422,58 @@ if ! createSystemArchive ; then
     errorExit "could not create system archive"
 fi
 
-log "removing daily backups older than $MAX_DAYS_TO_RETAIN days old"
-deleteOldestDailyBackups
-
-log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT completed"
-if [ "$EMAIL" ];then
-    if ! email "$SCRIPT: completed without errors" ; then
-        errorExit "could not send email"
-    fi
+# remove old local files and exit 
+if [ ! "$REMOTE" ];then
+	log "removing local daily backups older than $MAX_DAYS_TO_RETAIN days old"
+	deleteOldestDailyBackupsLocal
+	completionMessages
+	exit
 fi
+# manage remote data
+log "starting remote storage processing"
+log "service account: $SERVICE_ACCOUNT_EMAIL"
+
+# todo space warning
+if q=$(gdriveShowQuotaUsage) ; then
+	log "Storage Qouta: $q"
+else
+	errorExit "could not access the Drive API"
+fi
+
+# attempt to remove backup dir(s) with today's date in case of reruns
+ids="$(gdriveListFiles $REMOTE_ROOT_DIR_ID $DATE application/vnd.google-apps.folder  | awk '{print $1}' 2>/dev/null)"
+if [ ! -z "$ids" ];then
+		for i in ${ids[@]}; do
+			if gdriveDeleteFile $i ; then
+				log "existing \"$DATE\" folder  id=\"$i\" deleted"
+			else
+				log "WARNING: could not delete folder $i from backup root directory $REMOTE_ROOT_DIR_ID"
+				WARNING_FLAG=true
+			fi
+		done 
+fi
+
+# create a directory for today's backup files (YYYY-DD-MM)
+if REMOTE_DIR_ID=$(gdriveCreateFolder "$REMOTE_ROOT_DIR_ID" "$DATE"); then
+	log "backup dir created, name=\"$DATE\", id=\"$REMOTE_DIR_ID\""
+else	
+	errorExit "could not create backup dir $TODAY"
+fi
+
+# upload the backup files
+readarray -t files < <(find $BACKUP_DIR -name '*.gz')
+for i in "${files[@]}"
+do
+	if UPLOAD_FILE_ID=$(gdriveUploadFile $i $REMOTE_DIR_ID application/gzip); then
+		log "$i uploaded, id=\"$UPLOAD_FILE_ID\""
+	else
+		errorExit "could not upload file $i to backup dir, id=\"$REMOTE_DIR_ID\""
+	fi
+done
+
+
+log "removing remote daily backups older than $MAX_DAYS_TO_RETAIN days old"
+deleteOldestDailyBackupsRemote
+log "removing local backup files from $BACKUP_DIR"
+rm -rf $BACKUP_DIR
+completionMessages

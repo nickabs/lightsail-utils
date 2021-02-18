@@ -1,10 +1,26 @@
-create aws  profile for root
-
 # lightsail-snapshot.sh
 this script creates a new lightsail instance snapshot and deletes the oldest snapshots up to the specified maximum number of retained snapshots
 
 ## EXAMPLE
 `lightsail-snapshot.sh -l /var/log/lightsail-snapshot/lightsail-snapshot.log -m 2 -b "Ubuntu-1GB-London-1-Auto" -i "Ubuntu-1GB-London-1" -a Admin`
+
+---
+## Dependencies
+this script uses the [aws command line interface](https://aws.amazon.com/cli "cli") to manage lightsail instance snapshots.
+
+You will need an IAM user with the folliowing permissions:
+
+* lightsail:CreateInstanceSnapshot
+* lightsail:DeleteInstanceSnapshot
+* lightsail:GetInstanceSnapshots
+
+... and a [named profile](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html "AWS CLI named profiles") containing the access key for this account.  You can specify the profile name on the command line.
+
+make sure you understand the security implications of storing access keys.
+
+email notifications:
+
+You need to configure AWS [SES](https://aws.amazon.com/ses/pricing/ "SES")mail if you want to use the email notification option. The IAM account will need ses:SendEmail permission.  
 
 ---
 ## Schedule a timer to run the script (directories per Ubuntu 20.04)
@@ -65,4 +81,7 @@ enable log roation: /etc/logrotate.d/lightsail-snapshot
     weekly
     missingok
 }
+
+
+
 ```

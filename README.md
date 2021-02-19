@@ -48,11 +48,17 @@ The service account email address and private key in the credentials file are us
 
 the backup script creates a JWT access token that is sent to Google's Oauth 2.0 service.  Assuming Google can validate that the token was signed by the private key associated with the public key it has in its records it will return an access token.  The access token is valid for one hour and can be used by any application in possession to access the resources requested in the scope specified in the original JWT access request (the backup script requests the scope needed to read/write to the service account's Google Drive storage).
 
-The service account can also be used to access Google Cloud Platform (GCP) resources and services and you therefore need to specify (or create) a GCP IAM profile when you create the account.  It is good practice to limit access to the minimum set of resources needed by the account to do its work, however, since Google Drive is part of Google Workspace and not GCP, there are no IAM permissions that apply to the Google Drive API.  There does not seem to be an obvious way to prevent service accounts only being used for Google Drive access from being also used to access GCP services other than creating a profile with an impossible to fulfil set of conditions.
+The service account can also be used to access Google Cloud Platform (GCP) resources and services and you therefore need to specify (or create) a GCP IAM profile when you create the account.  It is good practice to limit access to the minimum set of resources needed by the account to do its work, however, since Google Drive is part of Google Workspace and not GCP, there are no IAM permissions that apply to the Google Drive API.  There does not seem to be an obvious way to prevent service accounts that are onlin intended to be used for Google Drive access from also being used to access GCP services other than by creating a profile with an impossible to fulfil set of conditions.
 
 ### protecting your account 
 Although the service account can't access your personal user data, anyone in possession of the service account's private key can access all the GCP resources allowed by the profile assigned to it - potentially allowing them to rack up unwanted bills - and of course they will also be able to access your backups.  You should learn about keeping your keys safe.
 
+### dependencies
+
+this script requires jq to parse the json returned by the Google APIs.  If jq is not avaialable for your distribution you can find installation instructions on the [github project](https://stedolan.github.io/jq/)
+
+other than jq the script uses various linux utilities that will be found on any modern linux distro (it was developed on unbuntu 20.4)
+***
 # lightsail-snapshot.sh
 this script creates a new lightsail instance snapshot and deletes the oldest snapshots up to the specified maximum number of retained snapshots.  See the usage statement for options.
 

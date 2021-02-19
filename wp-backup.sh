@@ -356,9 +356,9 @@ function checkAvailableStorageQuota() {
     gb=1024*1024*1024
 
     if (avail > $1 )
-        printf("%.2f GB available, future space needed estimated to be %.2f GB\n", avail/gb,$1/gb)  
+        printf("%.2f GiB available, future space needed estimated to be %.2f GiB\n", avail/gb,$1/gb)  
     else
-        printf("WARNING: %.2f GB available, future space requirement estimated to be %.2fGB\n", avail/gb,$1/gb)  
+        printf("WARNING: %.2f GiB available, future space requirement estimated to be %.2f GiB\n", avail/gb,$1/gb)  
 
     }' avail=$2
 }
@@ -465,12 +465,13 @@ if [ ! "$REMOTE" ];then
 	completionMessages
 	exit
 fi
+
 # remote storage
 log "starting remote storage processing"
 log "service account: $SERVICE_ACCOUNT_EMAIL"
 
 if q=$(showAvailableStorageQouta) ; then
-    log "$(echo $q|gawk '{  printf("Storage quota avaialble: %.2f MB\n",$1/1024/1024/1024) }')"
+    log "$(echo $q|gawk '{  printf("Storage quota avaialble: %.2f GiB\n",$1/1024/1024/1024) }')"
 else
     errorExit "could not access the Google Drive API: $q"
 fi

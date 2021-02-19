@@ -1,12 +1,11 @@
 # lightsail-snapshot.sh
-this script creates a new lightsail instance snapshot and deletes the oldest snapshots up to the specified maximum number of retained snapshots
+this script creates a new lightsail instance snapshot and deletes the oldest snapshots up to the specified maximum number of retained snapshots.  See the usage statement for options.
 
 ## EXAMPLE
 `lightsail-snapshot.sh -l /var/log/lightsail-snapshot/lightsail-snapshot.log -m 2 -b "Ubuntu-1GB-London-1-Auto" -i "Ubuntu-1GB-London-1" -a Admin`
 
----
 ## Dependencies
-this script uses the [aws command line interface](https://aws.amazon.com/cli "cli") to manage lightsail instance snapshots.
+this script uses the [aws command line interface](https://aws.amazon.com/cli "aws cli") to manage lightsail instance snapshots.
 
 You will need an IAM user with the folliowing permissions:
 
@@ -14,16 +13,15 @@ You will need an IAM user with the folliowing permissions:
 * lightsail:DeleteInstanceSnapshot
 * lightsail:GetInstanceSnapshots
 
-... and a [named profile](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html "AWS CLI named profiles") containing the access key for this account.  You can specify the profile name on the command line.
+... and a [named profile](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html "AWS CLI named profiles") containing the access key for this account installed on the VM where the script is installed.  You can specify the profile name on the command line.
 
 make sure you understand the security implications of storing access keys.
 
 email notifications:
 
-You need to configure AWS [SES](https://aws.amazon.com/ses/pricing/ "SES")mail if you want to use the email notification option. The IAM account will need ses:SendEmail permission.  
+You need to configure AWS [SES](https://aws.amazon.com/ses/pricing/ "AWS SES pricing + free tier") mail if you want to use the email notification option. The IAM account will need ses:SendEmail permission.  
 
----
-## Schedule a timer to run the script (directories per Ubuntu 20.04)
+## Schedule a timer to run the script (file locations per Ubuntu 20.04)
 create lightsail-lighthouse service unit:  /etc/systemd/system/lightsail-snapshot.service
 
 ```
@@ -60,11 +58,17 @@ WantedBy=timers.target
 the timer is associated with the timers target (this target sets up all timers that should be active after boot )
 the service is associated with the multi-user target (services that should be active after a the system boots to multi user mode)
 
-The timer is enabled by:
+enabled service:
 
 ```
 sudo systemctl enable lightsail-snapshot.service
 sudo systemctl enable lightsail-snapshot.timer
+```
+
+test the service runs:
+```
+sudo systemctl start lightsail-snapshot.timer
+sudo systemctl start lightsail-snapshot.service
 ```
 
 check status:
@@ -81,7 +85,5 @@ enable log roation: /etc/logrotate.d/lightsail-snapshot
     weekly
     missingok
 }
-
-
-
 ```
+---

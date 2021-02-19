@@ -20,34 +20,34 @@ function usage() {
 }
 
 function checkOptions() {
-		if [ ! "$LOG_FILE" ] || [ ! "$WP_ROOT_DIR" ]  || [ ! "$BACKUP_ROOT_DIR" ] || [ ! $MAX_DAYS_TO_RETAIN ]; then
+	if [ ! "$LOG_FILE" ] || [ ! "$WP_ROOT_DIR" ]  || [ ! "$BACKUP_ROOT_DIR" ] || [ ! $MAX_DAYS_TO_RETAIN ]; then
+		return 1
+	fi
+
+	if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
+		if [ ! "$FROM_EMAIL" ] || [ ! "$TO_EMAIL" ]; then
+			echo "specify both from and to emails" >&2
 			return 1
 		fi
-
-		if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
-			if [ ! "$FROM_EMAIL" ] || [ ! "$TO_EMAIL" ]; then
-				echo "specify both from and to emails" >&2
-				return 1
-			fi
-			if [ ! "$AWS_PROFILE" ]; then
-				echo "specify an AWS CLI profile when using the email option" >&2
-				return 1
-			fi
-			EMAIL=true
+		if [ ! "$AWS_PROFILE" ]; then
+			echo "specify an AWS CLI profile when using the email option" >&2
+			return 1
 		fi
+		EMAIL=true
+	fi
 
-		if [ "$REMOTE" ];then
-			if [ -z "$REMOTE_ROOT_DIR_ID" ] || [ -z "$SERVICE_ACCOUNT_CREDENTIALS_FILE" ];then
-				echo "please specify the remote root directory id and a service account credentials file when using remote storage" >&2
-				return 1
-			fi
-		fi
+    if [ "$REMOTE" ];then
+        if [ -z "$REMOTE_ROOT_DIR_ID" ] || [ -z "$SERVICE_ACCOUNT_CREDENTIALS_FILE" ];then
+            echo "please specify the remote root directory id and a service account credentials file when using remote storage" >&2
+            return 1
+        fi
+    fi
 }
 
 function isRoot() {
-    if [ "$(whoami)" != 'root' ]; then
-        return 1
-    fi
+	if [ "$(whoami)" != 'root' ]; then
+		return 1
+	fi
 }
 
 function log() {
@@ -59,18 +59,18 @@ function log() {
 
 function errorExit() {
 	local exit_status=$?
-    echo "ERROR: $@ with $exit_status" >> $LOG_FILE
-	if [ "$REMOTE" ]; then
-		log "cleaning up local backup files from $BACKUP_DIR"
+	log "$SCRIPT: ERROR with status code $exit_status : $@ "
+	if [ "$EMAIL" ];then
+        local msg="$SCRIPT: ERROR: $@"
+		if ! email "$msg";then
+			echo "$SCRIPT: ERROR: could not send email" 2>&1
+       	fi
+    fi
+	if [ "$REMOTE" ] && [ -d $BACKUP_DIR ]; then
+		log "removing working dir $BACKUP_DIR following error"
 		rm -rf $BACKUP_DIR
 	fi
-    echo "$SCRIPT: ERROR: $@ with $exit_status" 
-    if [ "$EMAIL" ];then
-		if ! email "$SCRIPT: ERROR" ; then
-			echo "$SCRIPT: ERROR: could not send email" 2>&1
-        fi
-    fi
-	exit 
+	exit $exit_status
 }
 
 function completionMessages() {
@@ -110,42 +110,45 @@ function createDatabaseArchive() {
 }
 
 function createContentArchive() {
-    # backup the user content directory
-    tar czf $CONTENT_ARCHIVE_FILE --transform="s,${WP_ROOT_DIR#/}/,,"  $WP_ROOT_DIR/wp-content
+	# backup the user content directory
+	tar czf $CONTENT_ARCHIVE_FILE --transform="s,${WP_ROOT_DIR#/}/,,"  $WP_ROOT_DIR/wp-content
 }
 
 function createSystemArchive() {
-    # backup the system files
-    tar czf $SYSTEM_ARCHIVE_FILE --transform="s,${WP_ROOT_DIR#/}/,," --exclude $WP_ROOT_DIR/wp-content $WP_ROOT_DIR 
+	# backup the system files
+	tar czf $SYSTEM_ARCHIVE_FILE --transform="s,${WP_ROOT_DIR#/}/,," --exclude $WP_ROOT_DIR/wp-content $WP_ROOT_DIR 
 
-    if [ ! -z "$PASSPHRASE" ] ; then
-        gpg --symmetric --passphrase $PASSPHRASE --batch -o ${SYSTEM_ARCHIVE_FILE}.gpg  $SYSTEM_ARCHIVE_FILE && rm $SYSTEM_ARCHIVE_FILE
-    fi
+	if [ ! -z "$PASSPHRASE" ] ; then
+		gpg --symmetric --passphrase $PASSPHRASE --batch -o ${SYSTEM_ARCHIVE_FILE}.gpg  $SYSTEM_ARCHIVE_FILE && rm $SYSTEM_ARCHIVE_FILE
+	fi
 }
 
 # removes all directories older than max retention days
 function deleteOldestDailyBackupsLocal() {
 	local backup_date
 	for d in ${BACKUP_ROOT_DIR}/????-??-??/ ; do
-	    backup_date=$(basename $d)
-	    if [ $( daysBetween $DATE $backup_date ) -ge $MAX_DAYS_TO_RETAIN ] ;then  
+		backup_date=$(basename $d)
+	   	if [ $( daysBetween $DATE $backup_date ) -ge $MAX_DAYS_TO_RETAIN ] ;then  
 			log "removing $d"
-				if ! rm -rf $d ; then
-					errorExit "error could not remove $d"
-				fi
-	    fi
+			if ! rm -rf $d ; then
+				errorExit "error could not remove $d"
+			fi
+	   	fi
 	done
 }
 
 
 function deleteOldestDailyBackupsRemote() {
-	local folders folder backup_date backup_id
+	local folders folder backup_date backup_id backup_count estimated_backup_size available_space estimated_space_required backups_pending
+    
 	# find folders named YYYY-MM-DD
 	readarray -t folders < <(gdriveListFiles $REMOTE_ROOT_DIR_ID "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]" application/vnd.google-apps.folder)
 	if [ -z "$folders" ]; then
-		log "no backup folders found older than $MAX_DAYS_TO_RETURN"
+		log "no backup folders found in remote root dir"
 		return
 	fi
+
+    backup_count=0
 
 	for folder in "${folders[@]}"
 	do
@@ -155,11 +158,28 @@ function deleteOldestDailyBackupsRemote() {
 			if gdriveDeleteFile $backup_id ; then
 				log "removing remote folder: \"$backup_date\" id=\"$backup_id\""
 			else
-				log "WARNING: could not delete folder $i from backup root directory $REMOTE_ROOT_DIR_ID"
+				log "WARNING: could not delete folder $i from remote root directory $REMOTE_ROOT_DIR_ID"
 				WARNING_FLAG=true
+                backup_count=$((++backup_count))
 			fi
+        else
+            backup_count=$((++backup_count))
 		fi
 	done
+    # check there is enough space for the next backup
+    estimated_backup_size=$(du -sb $BACKUP_DIR |gawk '{print $1}')
+    available_space=$(showAvailableStorageQouta)
+    backups_pending=$(( MAX_DAYS_TO_RETAIN - backup_count ))
+    estimated_space_required=$(( estimated_backup_size  * backups_pending ))
+
+    log "$backup_count backups found, $backups_pending pending"
+
+    log $(checkAvailableStorageQuota  "$estimated_space_required" "$available_space")
+
+    if [ "$estimated_space_required" -gt "$available_space" ];then
+        WARNING=true
+    fi
+
 }
 
 	    
@@ -240,7 +260,7 @@ function gdriveCreateFolder() {
 	if echo $response | gdriveCheckForErrors  ; then
 		return 1 
 	else
-		echo $response |jq -r '.id'
+		echo $response |jq -r '.id' 
 	fi
 }
 
@@ -272,7 +292,10 @@ function gdriveCheckForErrors() {
 	if [ -z "$e" ] || [[ "$e" =~ ^null ]]; then
 		return  1 # no error found
 	else
-		echo $e >&2
+		echo $e >&2 # redirected to log
+        if [ ! "$SILENT" ]; then
+		    echo $e # show on screen
+        fi
 	fi
 }
 
@@ -314,7 +337,8 @@ function gdriveUploadFile() {
 	fi
 }
 
-function gdriveShowQuotaUsage() {
+# returns available storage in bytes
+function showAvailableStorageQouta() {
 	local response=$(curl --silent \
 	  'https://www.googleapis.com/drive/v3/about?fields=storageQuota' \
 	  --header "Authorization: Bearer $AT" \
@@ -322,8 +346,21 @@ function gdriveShowQuotaUsage() {
 	if echo $response | gdriveCheckForErrors  ; then
 		return 1 
 	else
-		echo $response| jq -r '"limit: " +.storageQuota.limit + " usage:"+ .storageQuota.usage'
+        echo $response |jq -r '(.storageQuota.limit|tonumber)-(.storageQuota.usage|tonumber)' 
 	fi
+}
+
+# $1 = estimated back up size $2 = available storage quota
+function checkAvailableStorageQuota() {
+    echo $1 |gawk '{
+    gb=1024*1024*1024
+
+    if (avail > $1 )
+        printf("%.2f GB available, future space needed estimated to be %.2f GB\n", avail/gb,$1/gb)  
+    else
+        printf("WARNING: %.2f GB available, future space requirement estimated to be %.2fGB\n", avail/gb,$1/gb)  
+
+    }' avail=$2
 }
 
 # main
@@ -339,9 +376,9 @@ while getopts "rsw:l:b:t:f:p:m:g:c:a:" o; do
         a) export AWS_PROFILE=$OPTARG ;;
         w) export WP_ROOT_DIR=${OPTARG%/} ;;
         p) export PASSPHRASE=$OPTARG ;;
-		g) export REMOTE_ROOT_DIR_ID=$OPTARG;; # google drive folder id
-		c) export SERVICE_ACCOUNT_CREDENTIALS_FILE=$OPTARG;; # service account credentials file from https://console.developers.google.com/
-		r) export REMOTE=true ;;
+        g) export REMOTE_ROOT_DIR_ID=$OPTARG;; # google drive folder id
+        c) export SERVICE_ACCOUNT_CREDENTIALS_FILE=$OPTARG;; # service account credentials file from https://console.developers.google.com/
+        r) export REMOTE=true ;;
         *) usage ;;
         esac
 done
@@ -361,9 +398,11 @@ else
     exit -1
 fi
 
-#env
-export WARNING_FLAG
-DATE=$(date '+%Y-%m-%d')
+#env checks
+export AT # google auth token
+export WARNING_FLAG # when true send warning email about non critical errors
+export SILENT
+DATE=$(date '+%Y-%m-%d') # working directory for backup files
 
 WP_CONFIG_FILE="${WP_ROOT_DIR}/wp-config.php"
 
@@ -377,12 +416,10 @@ fi
 
 BACKUP_DIR=${BACKUP_ROOT_DIR}/${DATE}
 
-if [ -d $BACKUP_DIR ]; then
-    errorExit "Backup directory already exits: $BACKUP_DIR"
-fi
-
-if ! mkdir $BACKUP_DIR ; then
-    errorExit "can't create backup directory: $BACKUP_DIR"
+if [ ! -d $BACKUP_DIR ]; then
+    if ! mkdir $BACKUP_DIR ; then
+        errorExit "can't create backup directory: $BACKUP_DIR"
+    fi
 fi
 
 if [ "$REMOTE" ]; then
@@ -394,7 +431,6 @@ if [ "$REMOTE" ]; then
 	if [ -z "$SERVICE_ACCOUNT_EMAIL" ];then
 		errorExit "can't read client_email from : $SERVICE_ACCOUNT_CREDENTIALS_FILE"
 	fi
-	export AT
 	if ! AT=$(getGoogleAccessToken) ;then
 		errorExit "could not get access token"
 	fi
@@ -429,27 +465,26 @@ if [ ! "$REMOTE" ];then
 	completionMessages
 	exit
 fi
-# manage remote data
+# remote storage
 log "starting remote storage processing"
 log "service account: $SERVICE_ACCOUNT_EMAIL"
 
-# todo space warning
-if q=$(gdriveShowQuotaUsage) ; then
-	log "Storage Qouta: $q"
+if q=$(showAvailableStorageQouta) ; then
+    log "$(echo $q|gawk '{  printf("Storage quota avaialble: %.2f MB\n",$1/1024/1024/1024) }')"
 else
-	errorExit "could not access the Drive API"
+    errorExit "could not access the Google Drive API: $q"
 fi
 
 # attempt to remove backup dir(s) with today's date in case of reruns
 ids="$(gdriveListFiles $REMOTE_ROOT_DIR_ID $DATE application/vnd.google-apps.folder  | awk '{print $1}' 2>/dev/null)"
 if [ ! -z "$ids" ];then
-		for i in ${ids[@]}; do
-			if gdriveDeleteFile $i ; then
-				log "existing \"$DATE\" folder  id=\"$i\" deleted"
-			else
-				log "WARNING: could not delete folder $i from backup root directory $REMOTE_ROOT_DIR_ID"
-				WARNING_FLAG=true
-			fi
+	for i in ${ids[@]}; do
+		if gdriveDeleteFile $i ; then
+			log "existing \"$DATE\" folder  id=\"$i\" deleted"
+		else
+			log "WARNING: could not delete folder $i from backup root directory $REMOTE_ROOT_DIR_ID"
+			WARNING_FLAG=true
+		fi
 		done 
 fi
 
@@ -471,9 +506,9 @@ do
 	fi
 done
 
-
 log "removing remote daily backups older than $MAX_DAYS_TO_RETAIN days old"
 deleteOldestDailyBackupsRemote
+
 log "removing local backup files from $BACKUP_DIR"
 rm -rf $BACKUP_DIR
 completionMessages

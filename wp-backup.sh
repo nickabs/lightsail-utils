@@ -76,7 +76,7 @@ function errorExit() {
 function completionMessages() {
 	local msg
 	if [ $WARNING_FLAG ]; then
-		msg="$SCRIPT: WARNING: completed with errors"
+		msg="$SCRIPT: WARNING: completed with warnings"
 		log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT completed with warnings"
 	else
 		msg="$SCRIPT: completed"
@@ -177,7 +177,7 @@ function deleteOldestDailyBackupsRemote() {
     log $(checkAvailableStorageQuota  "$estimated_space_required" "$available_space")
 
     if [ "$estimated_space_required" -gt "$available_space" ];then
-        WARNING=true
+        WARNING_FLAG=true
     fi
 
 }

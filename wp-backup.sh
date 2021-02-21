@@ -10,12 +10,12 @@ function usage() {
     echo "Usage: $SCRIPT  -l log file -w wordpress dir -b backup dir -m days (max daily backups to retain)
         [ -s (silent) ]
         [ -p passphrase ] (when specified this will be used as a key to encrypt the systems archive )
-        [ -f email from -t email to -a aws profile name ]
-		[ -r remote storage -g google drive id -c credential json file for service account]
+        [ -f email from -t email to -a aws cli profile name ]
+		[ -r remote storage -g google drive id -c credential json file for service account ]
 		when specifying remote storage the backups are managed in the specified google drive and the local copy is deleted.
 
         e.g:
-        $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f lightsail-snapshot@example.com -t example@mail.com -a LightsailSnapshotAdmin
+         wp-backup.sh -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f wp-backup@example.com -t example@mail.com -a LightsailAdmin
         " 1>&2; exit 1;
 }
 

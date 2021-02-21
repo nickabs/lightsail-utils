@@ -99,7 +99,7 @@ You need to configure AWS [SES](https://aws.amazon.com/ses/pricing/ "AWS SES pri
 ## Schedule a timer to run the script 
 These instructions work on Ubuntu 20.04.
 
-1. create lightsail-lighthouse service unit file:  /etc/systemd/system/lightsail-snapshot.service
+1. create lightsail-lighthouse service unit file:  /etc/systemd/system/lightsail-snapshot.service:
 
 ```
 [Unit]
@@ -124,8 +124,8 @@ WantedBy=multi-user.target
 Description=Timer for lightsail-snapshot.sh (AWS lightsail snapshot management)
 
 [Timer]
-# Run on Sunday at 2:10am
-OnCalendar=Sun *-*-* 02:10:00
+#Run on first Monday of the month at 23:10
+OnCalendar=Mon *-*-01..07 23:10:00
 Persistent=true
 
 [Install]
@@ -134,6 +134,8 @@ WantedBy=timers.target
 
 The timer is associated with the _timers_ target (this target sets up all timers that should be active after boot )
 The service is associated with the _multi-user_ target (services that should be active after a the system boots to multi user mode)
+
+The systemd configuration above results in a new snapshot being created on the first Monday of every month and the previous version being retained for one month.
 
 enable the service and timer
 

@@ -1,6 +1,9 @@
 # lightsail utils 
 utility scripts for Wordpress websites deployed on a linux [AWS Lightsail](https://aws.amazon.com/lightsail/) instance.
 
+* [wp-backup.sh](https://github.com/nickabs/lightsail-utils#wp-backupsh): Create a daily archive of Wordpress database, systems files and uploaded content with an option to store the backups remotely on Google Drive
+* [lightsail-snapshot.sh](https://github.com/nickabs/lightsail-utils#lightsail-snapshotsh): Enable automatic daily snapshots of your AWS lightsail instance (this is an alternative to the AWS Lightsail _Automatic Snapshots_ feature, which is hard coded to retain 7 snapshots).
+
  
 ***
 # wp-backup.sh

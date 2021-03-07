@@ -51,7 +51,7 @@ function createSnapshot() {
 }
 
 function pendingSnapshots() {
-    aws lightsail get-instance-snapshots --output yaml --profile Admin |grep pending >/dev/null 
+    aws lightsail get-instance-snapshots --output yaml --profile $AWS_PROFILE |grep pending >/dev/null 
 }
 
 function email(){

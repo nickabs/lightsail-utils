@@ -10,12 +10,12 @@ function usage() {
     echo "Usage: $SCRIPT  -l log file -w wordpress dir -b backup dir -m days (max daily backups to retain)
         [ -s (silent) ]
         [ -p passphrase ] (when specified this will be used as a key to encrypt the systems archive )
-        [ -f email from -t email to -a aws cli profile name ]
-		[ -r remote storage -g google drive id -c credential json file for service account ]
+        [ -f email from -t email to -a aws profile name ]
+		[ -r remote storage -g google drive id -c credential json file for service account]
 		when specifying remote storage the backups are managed in the specified google drive and the local copy is deleted.
 
         e.g:
-         wp-backup.sh -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f wp-backup@example.com -t example@mail.com -a LightsailAdmin
+        $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f lightsail-snapshot@example.com -t example@mail.com -a LightsailSnapshotAdmin
         " 1>&2; exit 1;
 }
 
@@ -76,7 +76,7 @@ function errorExit() {
 function completionMessages() {
 	local msg
 	if [ $WARNING_FLAG ]; then
-		msg="$SCRIPT: WARNING: completed with errors"
+		msg="$SCRIPT: WARNING: completed with warnings"
 		log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT completed with warnings"
 	else
 		msg="$SCRIPT: completed"
@@ -123,7 +123,7 @@ function createSystemArchive() {
 	fi
 }
 
-# removes all directories older than max retention days
+# removes all directories older than max retention days - for local backups this is run *after* a backup has been created sucessfully
 function deleteOldestDailyBackupsLocal() {
 	local backup_date
 	for d in ${BACKUP_ROOT_DIR}/????-??-??/ ; do
@@ -138,8 +138,9 @@ function deleteOldestDailyBackupsLocal() {
 }
 
 
+# to maximise the use of space in the remote storage location the script will remove old backups before the new one is copied
 function deleteOldestDailyBackupsRemote() {
-	local folders folder backup_date backup_id backup_count estimated_backup_size available_space estimated_space_required backups_pending
+	local folders folder backup_date backup_id backup_count estimated_backup_size available_space estimated_space_required backups_pending deleted_count
     
 	# find folders named YYYY-MM-DD
 	readarray -t folders < <(gdriveListFiles $REMOTE_ROOT_DIR_ID "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]" application/vnd.google-apps.folder)
@@ -149,6 +150,7 @@ function deleteOldestDailyBackupsRemote() {
 	fi
 
     backup_count=0
+    deleted_count=0
 
 	for folder in "${folders[@]}"
 	do
@@ -157,27 +159,28 @@ function deleteOldestDailyBackupsRemote() {
 	   	if [ $( daysBetween $DATE $backup_date ) -ge $MAX_DAYS_TO_RETAIN ] ;then  
 			if gdriveDeleteFile $backup_id ; then
 				log "removing remote folder: \"$backup_date\" id=\"$backup_id\""
+                deleted_count=$((++deleted_count))
 			else
 				log "WARNING: could not delete folder $i from remote root directory $REMOTE_ROOT_DIR_ID"
 				WARNING_FLAG=true
-                backup_count=$((++backup_count))
 			fi
-        else
-            backup_count=$((++backup_count))
 		fi
+        backup_count=$((++backup_count))
 	done
+
+    sleep 60 # debug wait 60 seconds since qouta usage is not updated immediately after a deletion
     # check there is enough space for the next backup
     estimated_backup_size=$(du -sb $BACKUP_DIR |gawk '{print $1}')
     available_space=$(showAvailableStorageQouta)
-    backups_pending=$(( MAX_DAYS_TO_RETAIN - backup_count ))
+    backups_pending=$(( MAX_DAYS_TO_RETAIN - (backup_count - deleted_count) ))
     estimated_space_required=$(( estimated_backup_size  * backups_pending ))
 
-    log "$backup_count backups found, $backups_pending pending"
+    log "$backup_count backups found, $deleted_count deleted, $backups_pending pending"
 
     log $(checkAvailableStorageQuota  "$estimated_space_required" "$available_space")
 
     if [ "$estimated_space_required" -gt "$available_space" ];then
-        WARNING=true
+        WARNING_FLAG=true
     fi
 
 }
@@ -489,6 +492,9 @@ if [ ! -z "$ids" ];then
 		done 
 fi
 
+log "removing remote daily backups older than $MAX_DAYS_TO_RETAIN days old"
+deleteOldestDailyBackupsRemote
+
 # create a directory for today's backup files (YYYY-DD-MM)
 if REMOTE_DIR_ID=$(gdriveCreateFolder "$REMOTE_ROOT_DIR_ID" "$DATE"); then
 	log "backup dir created, name=\"$DATE\", id=\"$REMOTE_DIR_ID\""
@@ -497,7 +503,7 @@ else
 fi
 
 # upload the backup files
-readarray -t files < <(find $BACKUP_DIR -name '*.gz')
+readarray -t files < <(find $BACKUP_DIR -name '*.gz' -o -name '*.gpg' )
 for i in "${files[@]}"
 do
 	if UPLOAD_FILE_ID=$(gdriveUploadFile $i $REMOTE_DIR_ID application/gzip); then
@@ -507,8 +513,6 @@ do
 	fi
 done
 
-log "removing remote daily backups older than $MAX_DAYS_TO_RETAIN days old"
-deleteOldestDailyBackupsRemote
 
 log "removing local backup files from $BACKUP_DIR"
 rm -rf $BACKUP_DIR

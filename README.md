@@ -59,7 +59,7 @@ Although the service account can't access your personal user data, anyone in pos
 ### dependencies
 **curl** is used to access the Google Drive REST API
 
-The script uses various linux utilities that will be found on any modern linux distro (it was developed on unbuntu 20.4)
+The script uses various linux utilities that will be found on any modern linux distro (it was developed on unbuntu 20.04)
 
 the script has been tested with a Wordpress instance using **mysql**.  The database extract is done with **mysqldump**.
 

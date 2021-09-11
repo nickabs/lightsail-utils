@@ -1,3 +1,19 @@
+
+
+- [wp-backup.sh](#wp-backupsh)
+  * [EXAMPLE](#example)
+  * [Remote storage - service accounts](#remote-storage---service-accounts)
+    + [service account storage](#service-account-storage)
+    + [authentication](#authentication)
+    + [authorisation](#authorisation)
+    + [protecting your account](#protecting-your-account)
+    + [dependencies](#dependencies)
+- [lightsail-snapshot.sh](#lightsail-snapshotsh)
+  * [EXAMPLE](#example-1)
+  * [Dependencies](#dependencies)
+  * [Schedule a timer to run the script](#schedule-a-timer-to-run-the-script)
+
+
 # lightsail utils 
 utility scripts for Wordpress websites deployed on a linux [AWS Lightsail](https://aws.amazon.com/lightsail/) instance.
 

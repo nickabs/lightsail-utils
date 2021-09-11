@@ -311,7 +311,7 @@ function gdriveUploadFile() {
 	local mimeType="$3"
 
 	response=$( 
-	( cat  <<-! && cat $file && echo -en "\n\n--$boundary--\n" ) \
+	( cat  <<-! && cat $file && echo -en "\n--$boundary--" ) \
 		|curl --silent \
 		--request POST \
 		--header "Authorization: Bearer $AT" \

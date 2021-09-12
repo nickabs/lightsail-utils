@@ -45,7 +45,7 @@ function checkOptions() {
 		return 1
 	fi
 
-    if [ ! "$MAX_DAYS_TO_RETAIN" ] && [ ! "$RESTORE_DIR" ]; then
+    if [ ! "$MAX_DAYS_TO_RETAIN" ] && [ ! "$RESTORE_DATE" ]; then
         echo -e "you must specify the number of retention days when creating a new backup\n" >&2
 		return 1
 	fi
@@ -62,19 +62,19 @@ function checkOptions() {
         fi
     fi
 
-    if [[ ! "$RESTORE_DIR" =~ [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]];then
+    if [ "$RESTORE_DATE" ] && [[ ! "$RESTORE_DATE" =~ [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]];then
         echo -e "restore directory should be specified as YYYY-MM-DD\n" ; >&2
         return 1
     fi
 
-    if [ "$RESTORE_DIR" ] && [[ ! "$RESTORE_OPTION" =~ ^all$|^system$|^database$|^content$ ]];then
+    if [ "$RESTORE_DATE" ] && [[ ! "$RESTORE_OPTION" =~ ^all$|^system$|^database$|^content$ ]];then
         echo -e "you must specify a restore option : all, system, database or content\n" >&2
         return 1
     fi
         
 
 	if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
-        if [ "$RESTORE_DIR" ];then
+        if [ "$RESTORE_DATE" ];then
 			echo -e "email notifications not available when restoring data\n" >&2
 			return 1
 		fi
@@ -414,29 +414,31 @@ function checkAvailableStorageQuota() {
     }' avail=$2
 }
 
+
 # TODO
-#options
+
+
 function gdriveDownloadFile() {
     :
 }
 
-function restoreDatabase() {
-    databaseFile=$1
+function restoreDatabaseArchive() {
     # unzip
     # mysql
     # log 
+    return 0
 }
 
-function restoreSystemFiles() {
+function restoreSystemArchive() {
     # check perms
     # chmod based on -b option
-    :
+    return 0
 }
 
-function restoreSystemFiles() {
+function restoreContentArchive() {
     # check perms
     # chmod based on -b option
-    :
+    return 0
 }
 
 # main
@@ -455,7 +457,7 @@ while getopts "rsw:l:b:t:f:p:m:g:c:a:R:o:" o; do
         g) export REMOTE_ROOT_DIR_ID=$OPTARG;; # google drive folder id
         c) export SERVICE_ACCOUNT_CREDENTIALS_FILE=$OPTARG;; # service account credentials file from https://console.developers.google.com/
         r) export REMOTE=true ;;
-        R) export RESTORE_DIR=$OPTARG ;;
+        R) export RESTORE_DATE=$OPTARG ;;
         o) export RESTORE_OPTION=$OPTARG ;;
         *) usage ;;
         esac
@@ -480,7 +482,13 @@ fi
 export AT # google auth token
 export WARNING_FLAG # when true send warning email about non critical errors
 export SILENT
-DATE=$(date '+%Y-%m-%d') # working directory for backup files
+
+# working directory for backup files - when restoring use the date specified on the command line
+if [ "$RESTORE_DATE" ];then
+    DATE=$RESTORE_DATE
+else
+    DATE=$(date '+%Y-%m-%d') 
+fi
 
 WP_CONFIG_FILE="${WP_ROOT_DIR}/wp-config.php"
 
@@ -488,9 +496,6 @@ if [ ! -r $WP_CONFIG_FILE ]; then
     errorExit "Can't read WP config file: $WP_CONFIG_FILE"
 fi
 
-if [ ! -w $BACKUP_ROOT_DIR ]; then
-    errorExit "Can't write to backup directory: $BACKUP_ROOT_DIR"
-fi
 
 BACKUP_DIR=${BACKUP_ROOT_DIR}/${DATE}
 
@@ -514,17 +519,47 @@ SYSTEM_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-system.tar.gz
 
 # TODO
 # restore from backup
-echo debug
-if [ "$RESTORE_DIR" ];then
+if [ "$RESTORE_DATE" ];then
+    echo debug restore
     if [ "$REMOTE" ]; then
         :
         # todo get files
-    else if [ ! -d "$BACKUP_DIR" ] ; then
+    fi
+    if [ ! -d "$BACKUP_DIR" ] ; then
         errorExit "can't find backup directory: $BACKUP_DIR" 
     fi
+
+    log "Restoring wordpress archive: $RESTORE_DATE"
+
+    if [[ "$RESTORE_OPTION" =~ all|database ]] ; then
+        log "restoring database archive from $DATABASE_ARCHIVE_FILE"
+        if ! restoreDatabaseArchive ; then
+            errorExit "could not restore database archive" 
+        fi
+    fi
+
+    if [[ "$RESTORE_OPTION" =~ all|system ]]; then
+        log "restoring system archive from $SYSTEM_ARCHIVE_FILE"
+        if ! restoreSystemArchive ; then
+            errorExit "could not restore system archive" 
+        fi
+    fi
+
+    if [[ "$RESTORE_OPTION" =~ all|content ]]; then
+        log "restoring content archive from $CONTENT_ARCHIVE_FILE"
+        if ! restoreContentArchive ; then
+            errorExit "could not restore content archive" 
+        fi
+    fi
+
+    log "restore complete"
     exit
 fi
 
+# create a new backup 
+if [ ! -w $BACKUP_ROOT_DIR ]; then
+    errorExit "Can't write to backup directory: $BACKUP_ROOT_DIR"
+fi
 
 # create backup
 if [ ! -d $BACKUP_DIR ]; then
@@ -532,7 +567,6 @@ if [ ! -d $BACKUP_DIR ]; then
         errorExit "can't create backup directory: $BACKUP_DIR"
     fi
 fi
-
 
 echo "============================================" >>$LOG_FILE
 log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT starting"

@@ -1,7 +1,8 @@
 
 
 - [wp-backup.sh](#wp-backupsh)
-  * [EXAMPLE](#example)
+  * [EXAMPLE - backup](#example---backup-wordpress)
+  * [EXAMPLE - restore](#example---restore-wordpress)
   * [Remote storage - service accounts](#remote-storage---service-accounts)
     + [service account storage](#service-account-storage)
     + [authentication](#authentication)
@@ -11,7 +12,7 @@
 - [lightsail-snapshot.sh](#lightsail-snapshotsh)
   * [EXAMPLE](#example-1)
   * [Dependencies](#dependencies)
-  * [Schedule a timer to run the script](#schedule-a-timer-to-run-the-script)
+- [Schedule a timer to run the script](#schedule-a-timer-to-run-the-script)
 
 
 # lightsail utils 
@@ -34,10 +35,18 @@ the script will deletes the oldest archive directories up to the specified maxim
 
 note the system archive contains the WP config file (wp-config.php) and this file contains the Wordpress database access credentials in plain text.  There is an option to encrypt this archive file if you are going to keep it in a remote location.
 
-## EXAMPLE
+## EXAMPLE - backup wordpress
 ```
 wp-backup.sh -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f wp-backup@example.com -t example@mail.com -a LightsailAdmin
+
 ```
+## EXAMPLE - restore wordpress
+```
+wp-backup.s -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -R 2021-02-01 -o all
+
+```
+when using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified google drive
+
 See usage statement for more details
 
 ## Remote storage - service accounts
@@ -113,8 +122,8 @@ email notifications:
 
 You need to configure AWS [SES](https://aws.amazon.com/ses/pricing/ "AWS SES pricing + free tier") mail if you want to use the email notification option. The IAM account will need ses:SendEmail permission.  
 
-## Schedule a timer to run the script 
-These instructions work on Ubuntu 20.04.
+# Schedule a timer to run the script 
+You can schedule the scripts to run using systemd (these instructions show how to do this for lightsail-snapshot.sh and work for Ubunty 20.04).
 
 1. create lightsail-lighthouse service unit file:  /etc/systemd/system/lightsail-snapshot.service:
 
@@ -181,4 +190,5 @@ systemctl status lightsail-snapshot.timer
 ---
 
 ***
+
 

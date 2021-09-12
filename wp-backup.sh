@@ -13,20 +13,21 @@ function usage() {
         [ -p passphrase ] (when specified this will be used as a key to encrypt the systems archive )
         [ -f email from -t email to -a aws profile name ]
 		[ -r remote storage -g google drive id -c credential json file for service account]
-        [ -R YYYY-MM-DD (restore from backup directory) -o all|system|content|database (restore options to restore all backup files or individual parts of the backup) ]
+        [ -R YYYY-MM-DD (restore from backup directory) -o all|system|content|database (specifies which archives to restore)
 
         EXAMPLE
         1. backup wordpress files and copy to remote storage (note when specifying remote storage the backups are managed in the specified google drive and the local copy is deleted)
 
         $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f lightsail-snapshot@example.com -t example@mail.com -a LightsailSnapshotAdmin
 
-        to restore the backup from 1st February 2021 
+        2. to restore the backup from 1st February 2021 
         $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -R 2021-02-01 -o all
 
-        when using the restore option with the remote storage options above, the files will be retreived from the specified google drive before the restoration is done.
+        when using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified google drive
 
         see https://github.com/nickabs/lightsail-utils for more information
-        " 1>&2; exit 1;
+        " 1>&2
+        exit 1
 }
 
 function checkOptions() {
@@ -50,6 +51,11 @@ function checkOptions() {
 		return 1
 	fi
 
+    if [ "$RESTORE" ] && [ "$MAX_DAYS_TO_RETAIN" ]; then
+        echo -e "you can't use the -m and -R options at the same time"
+        return 1
+    fi
+
     if [ "$WP_ROOT_DIR" == "$BACKUP_ROOT_DIR" ]; then
         echo -e "can't create backup files in the wordpress root directory\n" >&2 
         return 1
@@ -71,7 +77,7 @@ function checkOptions() {
         echo -e "you must specify a restore option : all, system, database or content\n" >&2
         return 1
     fi
-        
+
 
 	if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
         if [ "$RESTORE_DATE" ];then
@@ -107,7 +113,7 @@ function log() {
 
 function errorExit() {
 	local exit_status=$?
-	log "$SCRIPT: ERROR with status code $exit_status : $@ "
+	log "$SCRIPT: ERROR: $@ "
 	if [ "$EMAIL" ];then
         local msg="$SCRIPT: ERROR: $@"
 		if ! email "$msg";then
@@ -216,7 +222,7 @@ function deleteOldestDailyBackupsRemote() {
         backup_count=$((++backup_count))
 	done
 
-    sleep 60 # debug wait 60 seconds since qouta usage is not updated immediately after a deletion
+    sleep 60 # wait 60 seconds since qouta usage is not updated immediately after a deletion
     # check there is enough space for the next backup
     estimated_backup_size=$(du -sb $BACKUP_DIR |gawk '{print $1}')
     available_space=$(showAvailableStorageQouta)
@@ -293,8 +299,49 @@ function gdriveDeleteFile() {
 	fi
 }
 
-# $1 parent folder id $2 folder name
+# downloads a file from google drive 
+# $1 id $2 output file name
+function gdriveDownloadFile() {
+        local gdrive_size=0
+        local download_size=0
+    
+        # get the remote file size
+		local response="$(
+            curl  --silent \
+            --header "Authorization: Bearer $AT" \
+            --header 'Accept: application/json' \
+            https://www.googleapis.com/drive/v3/files/${1}?fields=size
+        )"
+        if echo $response | gdriveCheckForErrors  ; then
+            return 1 
+        else
+            gdrive_size=$(echo $response |jq -r '.size')
+        fi
+
+        # get the file
+		curl -o $2 --silent \
+		--header "Authorization: Bearer $AT" \
+		--header 'Accept: application/json' \
+        --compressed \
+        https://www.googleapis.com/drive/v3/files/${1}?alt=media
+
+        download_size=$(stat -c%s "$2")
+
+        download_size="${download_size:-0}"
+        gdrive_size="${gdrive_size:-0}"
+        if [  "$download_size" -eq 0 ]; then
+            errorExit "$2 download failed"
+        fi
+
+        if [ "$download_size" -eq "$gdrive_size" ] ; then
+            log "downloaded $2: $download_size bytes"
+        else
+            errorExit "$2 download failed: expected $gdrive_size bytes got $download_size bytes"
+        fi
+}
+
 # prints id of created folder and returns zero if successful
+# $1 parent folder id $2 folder name
 function gdriveCreateFolder() {
 	local response="$(
 		curl --silent \
@@ -315,7 +362,6 @@ function gdriveCreateFolder() {
 	fi
 }
 
-# $1 = parent dir $2 = regex match pattern [ $3 = mimeType ]
 # prints id mimeType name for files matching the regex
 function gdriveListFiles() {
 
@@ -414,12 +460,45 @@ function checkAvailableStorageQuota() {
     }' avail=$2
 }
 
+function downloadRemoteArchiveFiles() {
 
-# TODO
+        if [ ! -d "$BACKUP_DIR" ] && ! mkdir $BACKUP_DIR ;then
+                errorExit "could not create $BACKUP_DIR"
+        fi
+        # get the folder id for the directory containing the archive files
+        local folder_id="$(gdriveListFiles $REMOTE_ROOT_DIR_ID $DATE application/vnd.google-apps.folder  | awk '{print $1}' )"
 
+        if [ -z "$folder_id"  ]; then
+            errorExit "Can't find remote backup directory: $DATE"
+        fi
 
-function gdriveDownloadFile() {
-    :
+        # get a list of the gzipped archives and download  them
+        declare -A a="( $(gdriveListFiles $folder_id "${DATE}.*.gz$" application/gzip | awk '{ printf "[%s]=%s ", $3, $1  }') )"
+
+        if [[ "$RESTORE_OPTION" =~ all|database ]];then
+            key=${DATABASE_ARCHIVE_FILE##*/}
+            id=${a[${key}]}
+            log "downloading database archive file $id to $DATABASE_ARCHIVE_FILE"
+            if ! gdriveDownloadFile $id $DATABASE_ARCHIVE_FILE ; then
+                errorExit "remote download failed"
+            fi  
+        fi
+        if [[ "$RESTORE_OPTION" =~ all|system ]];then
+            key=${SYSTEM_ARCHIVE_FILE##*/}
+            id=${a[${key}]}
+            log "downloading system archive file $id to $SYSTEM_ARCHIVE_FILE"
+            if ! gdriveDownloadFile $id $SYSTEM_ARCHIVE_FILE ; then
+                errorExit "remote download failed"
+            fi  
+        fi
+        if [[ "$RESTORE_OPTION" =~ all|content ]];then
+            key=${CONTENT_ARCHIVE_FILE##*/}
+            id=${a[${key}]}
+            log "downloading content archive file $id to $CONTENT_ARCHIVE_FILE"
+            if ! gdriveDownloadFile $id $CONTENT_ARCHIVE_FILE ; then
+                errorExit "remote download failed"
+            fi  
+        fi
 }
 
 function restoreDatabaseArchive() {
@@ -447,21 +526,18 @@ function restoreDatabaseArchive() {
         log "can't open unzipped archive $f"
         return 1
     fi
-    log "running $f"
+    log "running $f on host: $host user: $user database: $db_name"
     mysql -h $host -u $user $db_name <  $f
-    log "database archive restored"
 }
 
 function restoreSystemArchive() {
-    # check perms
-    # chmod based on -b option
-    return 0
+    log "extracting $SYSTEM_ARCHIVE_FILE to $WP_ROOT_DIR"
+    tar xf $SYSTEM_ARCHIVE_FILE -C $WP_ROOT_DIR --same-owner
 }
 
 function restoreContentArchive() {
-    # check perms
-    # chmod based on -b option
-    return 0
+    log "extracting $CONTENT_ARCHIVE_FILE to $WP_ROOT_DIR"
+    tar xf $CONTENT_ARCHIVE_FILE -C $WP_ROOT_DIR --same-owner
 }
 
 # main
@@ -480,14 +556,18 @@ while getopts "rsw:l:b:t:f:p:m:g:c:a:R:o:" o; do
         g) export REMOTE_ROOT_DIR_ID=$OPTARG;; # google drive folder id
         c) export SERVICE_ACCOUNT_CREDENTIALS_FILE=$OPTARG;; # service account credentials file from https://console.developers.google.com/
         r) export REMOTE=true ;;
-        R) export RESTORE_DATE=$OPTARG ;;
+        R) export RESTORE=true;RESTORE_DATE=$OPTARG ;;
         o) export RESTORE_OPTION=$OPTARG ;;
         *) usage ;;
         esac
 done
 
-if ! checkOptions ; then
+if [ $# -eq 0 ] ; then
 	usage
+fi
+
+if ! checkOptions ; then
+    usage
 fi
 
 if ! isRoot ;then
@@ -501,7 +581,7 @@ else
     exit -1
 fi
 
-#env checks
+#env 
 export AT # google auth token
 export WARNING_FLAG # when true send warning email about non critical errors
 export SILENT
@@ -519,8 +599,10 @@ if [ ! -r $WP_CONFIG_FILE ]; then
     errorExit "Can't read WP config file: $WP_CONFIG_FILE"
 fi
 
-
 BACKUP_DIR=${BACKUP_ROOT_DIR}/${DATE}
+DATABASE_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-database.sql.gz 
+CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz 
+SYSTEM_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-system.tar.gz 
 
 if [ "$REMOTE" ]; then
 	if [ ! -r "$SERVICE_ACCOUNT_CREDENTIALS_FILE" ] ; then
@@ -536,55 +618,48 @@ if [ "$REMOTE" ]; then
 	fi
 fi
 
-DATABASE_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-database.sql.gz 
-CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz 
-SYSTEM_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-system.tar.gz 
-
-
 if [ ! -w $BACKUP_ROOT_DIR ]; then # both restore and backup options need to be able to write to this directory
     errorExit "Can't write to backup directory: $BACKUP_ROOT_DIR"
 fi
 
-# TODO
-# restore from backup
-if [ "$RESTORE_DATE" ];then
-    echo debug restore
-    if [ "$REMOTE" ]; then
-        :
-        # todo get files
-    fi
-    if [ ! -d "$BACKUP_DIR" ] ; then
-        errorExit "can't find backup directory: $BACKUP_DIR" 
+# restore wordpress from backup
+if [ "$RESTORE" ];then
+    if [ "$REMOTE" ]; then 
+        log "downloading remote archive files"
+        if  ! downloadRemoteArchiveFiles ; then
+            errorExit "Could not download remote archive files"
+        fi
     fi
 
     log "Restoring wordpress archive: $RESTORE_DATE"
-    cd $BACKUP_DIR
 
     if [[ "$RESTORE_OPTION" =~ all|database ]] ; then
-        log "restoring database archive from $DATABASE_ARCHIVE_FILE"
         if ! restoreDatabaseArchive ; then
             errorExit "could not restore database archive" 
+        else
+            log "database archive restored"
         fi
     fi
 
     if [[ "$RESTORE_OPTION" =~ all|system ]]; then
-        log "restoring system archive from $SYSTEM_ARCHIVE_FILE"
         if ! restoreSystemArchive ; then
             errorExit "could not restore system archive" 
+        else
+            log "system archive restored"
         fi
     fi
 
     if [[ "$RESTORE_OPTION" =~ all|content ]]; then
-        log "restoring content archive from $CONTENT_ARCHIVE_FILE"
         if ! restoreContentArchive ; then
             errorExit "could not restore content archive" 
+        else
+            log "content archive restored"
         fi
     fi
 
     log "restore complete"
     exit
 fi
-
 
 # create backup
 if [ ! -d $BACKUP_DIR ]; then
@@ -615,8 +690,9 @@ fi
 if [ ! "$REMOTE" ];then
 	log "removing local daily backups older than $MAX_DAYS_TO_RETAIN days old"
 	deleteOldestDailyBackupsLocal
-	completionMessages
-	exit
+	completionMessages 
+
+    exit # end of local back up process
 fi
 
 # remote storage
@@ -629,17 +705,17 @@ else
     errorExit "could not access the Google Drive API: $q"
 fi
 
-# attempt to remove backup dir(s) with today's date in case of reruns
+# attempt to remove any remote backup dir(s) with today's date in case of reruns
 ids="$(gdriveListFiles $REMOTE_ROOT_DIR_ID $DATE application/vnd.google-apps.folder  | awk '{print $1}' 2>/dev/null)"
 if [ ! -z "$ids" ];then
-	for i in ${ids[@]}; do
-		if gdriveDeleteFile $i ; then
-			log "existing \"$DATE\" folder  id=\"$i\" deleted"
-		else
-			log "WARNING: could not delete folder $i from backup root directory $REMOTE_ROOT_DIR_ID"
-			WARNING_FLAG=true
-		fi
-		done 
+    for i in ${ids[@]}; do
+        if gdriveDeleteFile $i ; then
+            log "existing \"$DATE\" folder  id=\"$i\" deleted"
+        else
+            log "WARNING: could not delete folder $i from backup root directory $REMOTE_ROOT_DIR_ID"
+            WARNING_FLAG=true
+        fi
+        done 
 fi
 
 log "removing remote daily backups older than $MAX_DAYS_TO_RETAIN days old"
@@ -662,7 +738,6 @@ do
 		errorExit "could not upload file $i to backup dir, id=\"$REMOTE_DIR_ID\""
 	fi
 done
-
 
 log "removing local backup files from $BACKUP_DIR"
 rm -rf $BACKUP_DIR

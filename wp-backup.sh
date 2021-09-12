@@ -423,10 +423,33 @@ function gdriveDownloadFile() {
 }
 
 function restoreDatabaseArchive() {
-    # unzip
-    # mysql
-    # log 
-    return 0
+    
+    if [ ! -f $DATABASE_ARCHIVE_FILE ]; then
+        log "can't find $DATABASE_ARCHIVE_FILE"
+        return 1
+    fi
+
+    log "unzipping $DATABASE_ARCHIVE_FILE"
+    if ! gunzip $DATABASE_ARCHIVE_FILE ; then
+        log "can't unzip $DATABASE_ARCHIVE_FILE"
+        return 1
+    fi
+
+	local db_name=$(gawk 'BEGIN {RS=";" } /DB_NAME/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
+	local user=$(gawk 'BEGIN {RS=";" } /DB_USER/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
+	local host=$(gawk 'BEGIN {RS=";" } /DB_HOST/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
+
+    # setting this env variable avoids supplying password on command line
+    export MYSQL_PWD=$(gawk 'BEGIN {RS=";" } /DB_PASSWORD/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
+
+    f="${DATABASE_ARCHIVE_FILE%.gz}"
+    if [ ! -f "$f" ]; then
+        log "can't open unzipped archive $f"
+        return 1
+    fi
+    log "running $f"
+    mysql -h $host -u $user $db_name <  $f
+    log "database archive restored"
 }
 
 function restoreSystemArchive() {
@@ -517,6 +540,11 @@ DATABASE_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-database.sql.gz
 CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz 
 SYSTEM_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-system.tar.gz 
 
+
+if [ ! -w $BACKUP_ROOT_DIR ]; then # both restore and backup options need to be able to write to this directory
+    errorExit "Can't write to backup directory: $BACKUP_ROOT_DIR"
+fi
+
 # TODO
 # restore from backup
 if [ "$RESTORE_DATE" ];then
@@ -530,6 +558,7 @@ if [ "$RESTORE_DATE" ];then
     fi
 
     log "Restoring wordpress archive: $RESTORE_DATE"
+    cd $BACKUP_DIR
 
     if [[ "$RESTORE_OPTION" =~ all|database ]] ; then
         log "restoring database archive from $DATABASE_ARCHIVE_FILE"
@@ -556,10 +585,6 @@ if [ "$RESTORE_DATE" ];then
     exit
 fi
 
-# create a new backup 
-if [ ! -w $BACKUP_ROOT_DIR ]; then
-    errorExit "Can't write to backup directory: $BACKUP_ROOT_DIR"
-fi
 
 # create backup
 if [ ! -d $BACKUP_DIR ]; then

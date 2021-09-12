@@ -7,41 +7,89 @@ set -o errtrace
 trap "errorExit process terminated" SIGTERM SIGINT SIGQUIT SIGKILL ERR
 
 function usage() {
-    echo "Usage: $SCRIPT  -l log file -w wordpress dir -b backup dir -m days (max daily backups to retain)
+    echo "Usage: $SCRIPT  -l log file -w wordpress dir -b backup dir
+        [ -m days (max daily backups to retain) ]
         [ -s (silent) ]
         [ -p passphrase ] (when specified this will be used as a key to encrypt the systems archive )
         [ -f email from -t email to -a aws profile name ]
 		[ -r remote storage -g google drive id -c credential json file for service account]
-		when specifying remote storage the backups are managed in the specified google drive and the local copy is deleted.
+        [ -R YYYY-MM-DD (restore from backup directory) -o all|system|content|database (restore options to restore all backup files or individual parts of the backup) ]
 
-        e.g:
+        EXAMPLE
+        1. backup wordpress files and copy to remote storage (note when specifying remote storage the backups are managed in the specified google drive and the local copy is deleted)
+
         $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f lightsail-snapshot@example.com -t example@mail.com -a LightsailSnapshotAdmin
+
+        to restore the backup from 1st February 2021 
+        $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -R 2021-02-01 -o all
+
+        when using the restore option with the remote storage options above, the files will be retreived from the specified google drive before the restoration is done.
+
+        see https://github.com/nickabs/lightsail-utils for more information
         " 1>&2; exit 1;
 }
 
 function checkOptions() {
-	if [ ! "$LOG_FILE" ] || [ ! "$WP_ROOT_DIR" ]  || [ ! "$BACKUP_ROOT_DIR" ] || [ ! $MAX_DAYS_TO_RETAIN ]; then
+	if [ ! "$LOG_FILE" ]; then
+        echo -e "you must specify a log file\n" >&2
 		return 1
 	fi
 
+    if [ ! "$WP_ROOT_DIR" ]; then
+        echo -e "you must specify the wordpress root directory\n" >&2
+		return 1
+	fi
+
+    if [ ! "$BACKUP_ROOT_DIR" ]; then
+        echo -e "you must specify a backup dir\n" >&2
+		return 1
+	fi
+
+    if [ ! "$MAX_DAYS_TO_RETAIN" ] && [ ! "$RESTORE_DIR" ]; then
+        echo -e "you must specify the number of retention days when creating a new backup\n" >&2
+		return 1
+	fi
+
+    if [ "$WP_ROOT_DIR" == "$BACKUP_ROOT_DIR" ]; then
+        echo -e "can't create backup files in the wordpress root directory\n" >&2 
+        return 1
+    fi
+
+    if [ "$REMOTE" ];then
+        if [ -z "$REMOTE_ROOT_DIR_ID" ] || [ -z "$SERVICE_ACCOUNT_CREDENTIALS_FILE" ];then
+            echo -e "please specify the remote root directory id and a service account credentials file when using remote storage\n" >&2
+            return 1
+        fi
+    fi
+
+    if [[ ! "$RESTORE_DIR" =~ [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]];then
+        echo -e "restore directory should be specified as YYYY-MM-DD\n" ; >&2
+        return 1
+    fi
+
+    if [ "$RESTORE_DIR" ] && [[ ! "$RESTORE_OPTION" =~ ^all$|^system$|^database$|^content$ ]];then
+        echo -e "you must specify a restore option : all, system, database or content\n" >&2
+        return 1
+    fi
+        
+
 	if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
+        if [ "$RESTORE_DIR" ];then
+			echo -e "email notifications not available when restoring data\n" >&2
+			return 1
+		fi
+
 		if [ ! "$FROM_EMAIL" ] || [ ! "$TO_EMAIL" ]; then
-			echo "specify both from and to emails" >&2
+			echo -e "specify both from and to emails\n" >&2
 			return 1
 		fi
 		if [ ! "$AWS_PROFILE" ]; then
-			echo "specify an AWS CLI profile when using the email option" >&2
+			echo -e "specify an AWS CLI profile when using the email option\n" >&2
 			return 1
 		fi
 		EMAIL=true
 	fi
 
-    if [ "$REMOTE" ];then
-        if [ -z "$REMOTE_ROOT_DIR_ID" ] || [ -z "$SERVICE_ACCOUNT_CREDENTIALS_FILE" ];then
-            echo "please specify the remote root directory id and a service account credentials file when using remote storage" >&2
-            return 1
-        fi
-    fi
 }
 
 function isRoot() {
@@ -366,9 +414,34 @@ function checkAvailableStorageQuota() {
     }' avail=$2
 }
 
+# TODO
+#options
+function gdriveDownloadFile() {
+    :
+}
+
+function restoreDatabase() {
+    databaseFile=$1
+    # unzip
+    # mysql
+    # log 
+}
+
+function restoreSystemFiles() {
+    # check perms
+    # chmod based on -b option
+    :
+}
+
+function restoreSystemFiles() {
+    # check perms
+    # chmod based on -b option
+    :
+}
+
 # main
 export SCRIPT=$(basename $0)
-while getopts "rsw:l:b:t:f:p:m:g:c:a:" o; do
+while getopts "rsw:l:b:t:f:p:m:g:c:a:R:o:" o; do
         case "$o" in
         s) export SILENT=true ;; # disable screen output
         l) export LOG_FILE=$OPTARG ;; 
@@ -382,6 +455,8 @@ while getopts "rsw:l:b:t:f:p:m:g:c:a:" o; do
         g) export REMOTE_ROOT_DIR_ID=$OPTARG;; # google drive folder id
         c) export SERVICE_ACCOUNT_CREDENTIALS_FILE=$OPTARG;; # service account credentials file from https://console.developers.google.com/
         r) export REMOTE=true ;;
+        R) export RESTORE_DIR=$OPTARG ;;
+        o) export RESTORE_OPTION=$OPTARG ;;
         *) usage ;;
         esac
 done
@@ -419,12 +494,6 @@ fi
 
 BACKUP_DIR=${BACKUP_ROOT_DIR}/${DATE}
 
-if [ ! -d $BACKUP_DIR ]; then
-    if ! mkdir $BACKUP_DIR ; then
-        errorExit "can't create backup directory: $BACKUP_DIR"
-    fi
-fi
-
 if [ "$REMOTE" ]; then
 	if [ ! -r "$SERVICE_ACCOUNT_CREDENTIALS_FILE" ] ; then
 		errorExit "can't open credentials file: $SERVICE_ACCOUNT_CREDENTIALS_FILE"
@@ -442,6 +511,28 @@ fi
 DATABASE_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-database.sql.gz 
 CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz 
 SYSTEM_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-system.tar.gz 
+
+# TODO
+# restore from backup
+echo debug
+if [ "$RESTORE_DIR" ];then
+    if [ "$REMOTE" ]; then
+        :
+        # todo get files
+    else if [ ! -d "$BACKUP_DIR" ] ; then
+        errorExit "can't find backup directory: $BACKUP_DIR" 
+    fi
+    exit
+fi
+
+
+# create backup
+if [ ! -d $BACKUP_DIR ]; then
+    if ! mkdir $BACKUP_DIR ; then
+        errorExit "can't create backup directory: $BACKUP_DIR"
+    fi
+fi
+
 
 echo "============================================" >>$LOG_FILE
 log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT starting"

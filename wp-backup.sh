@@ -13,7 +13,8 @@ function usage() {
         [ -p passphrase ] (when specified this will be used as a key to encrypt the systems archive )
         [ -f email from -t email to -a aws profile name ]
 		[ -r remote storage -g google drive id -c credential json file for service account]
-        [ -R YYYY-MM-DD (restore from backup directory) -o all|system|content|database (specifies which archives to restore)
+        [ -R YYYY-MM-DD (restore from backup directory) -o all|system|content|database (specifies which archives to restore) ]
+        [ -d YYYY-MM-DD -o all|system|content|database (used with the -r option, download the remote backup archives without restoring ) ]
 
         EXAMPLE
         1. backup wordpress files and copy to remote storage (note when specifying remote storage the backups are managed in the specified google drive and the local copy is deleted)
@@ -25,6 +26,9 @@ function usage() {
 
         when using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified google drive
 
+        3. get the remote backup archives from 1st February 2021 but do not restore them
+        $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -d 2021-02-01 -o all
+
         see https://github.com/nickabs/lightsail-utils for more information
         " 1>&2
         exit 1
@@ -32,65 +36,79 @@ function usage() {
 
 function checkOptions() {
 	if [ ! "$LOG_FILE" ]; then
-        echo -e "you must specify a log file\n" >&2
+        echo -e "ERROR: you must specify a log file\n" >&2
 		return 1
 	fi
 
     if [ ! "$WP_ROOT_DIR" ]; then
-        echo -e "you must specify the wordpress root directory\n" >&2
+        echo -e "ERROR: you must specify the wordpress root directory\n" >&2
 		return 1
 	fi
 
     if [ ! "$BACKUP_ROOT_DIR" ]; then
-        echo -e "you must specify a backup dir\n" >&2
+        echo -e "ERROR: you must specify a backup dir\n" >&2
 		return 1
 	fi
 
-    if [ ! "$MAX_DAYS_TO_RETAIN" ] && [ ! "$RESTORE_DATE" ]; then
-        echo -e "you must specify the number of retention days when creating a new backup\n" >&2
+    if [ ! "$MAX_DAYS_TO_RETAIN" ] && [ ! "$ARCHIVE_DATE" ]; then
+        echo -e "ERROR: you must specify the number of retention days when creating a new backup\n" >&2
 		return 1
 	fi
 
     if [ "$RESTORE" ] && [ "$MAX_DAYS_TO_RETAIN" ]; then
-        echo -e "you can't use the -m and -R options at the same time"
+        echo -e "ERROR: you can't use the -m and -R options at the same time"
         return 1
     fi
 
     if [ "$WP_ROOT_DIR" == "$BACKUP_ROOT_DIR" ]; then
-        echo -e "can't create backup files in the wordpress root directory\n" >&2 
+        echo -e "ERROR: can't create backup files in the wordpress root directory\n" >&2 
+        return 1
+    fi
+
+    if [ "$DOWNLOAD" ] && [ "$RESTORE" ]; then
+        echo -e "ERROR: you can't use the -d (download) option with the -R (restore) option  \n" >&2 
+        return 1
+    fi
+
+    if [ "$DOWNLOAD" ] && [ -z "$REMOTE" ]; then
+        echo -e "ERROR: you can only use the download option with the -r (remote) flag \n" >&2 
         return 1
     fi
 
     if [ "$REMOTE" ];then
         if [ -z "$REMOTE_ROOT_DIR_ID" ] || [ -z "$SERVICE_ACCOUNT_CREDENTIALS_FILE" ];then
-            echo -e "please specify the remote root directory id and a service account credentials file when using remote storage\n" >&2
+            echo -e "ERROR: please specify the remote root directory id and a service account credentials file when using remote storage\n" >&2
             return 1
         fi
     fi
 
-    if [ "$RESTORE_DATE" ] && [[ ! "$RESTORE_DATE" =~ [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]];then
-        echo -e "restore directory should be specified as YYYY-MM-DD\n" ; >&2
-        return 1
+    if [ "$RESTORE" ]|| [ "$DOWNLOAD" ] ; then
+        if [[ ! "$ARCHIVE_DATE" =~ [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]];then
+            echo -e "ERROR: restore directory should be specified as YYYY-MM-DD\n" ; >&2
+            return 1
+        fi
     fi
 
-    if [ "$RESTORE_DATE" ] && [[ ! "$RESTORE_OPTION" =~ ^all$|^system$|^database$|^content$ ]];then
-        echo -e "you must specify a restore option : all, system, database or content\n" >&2
-        return 1
+    if [ "$RESTORE" ] || [ "$DOWNLOAD" ]; then 
+        if [[ ! "$ARCHIVE_OPTION" =~ ^all$|^system$|^database$|^content$ ]];then
+            echo -e "ERROR: you must specify one of these options with the -o flag : all, system, database or content\n" >&2
+            return 1
+        fi
     fi
 
 
 	if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
-        if [ "$RESTORE_DATE" ];then
-			echo -e "email notifications not available when restoring data\n" >&2
+        if [ "$RESTORE" ];then
+			echo -e "ERROR: email notifications not available when restoring data\n" >&2
 			return 1
 		fi
 
 		if [ ! "$FROM_EMAIL" ] || [ ! "$TO_EMAIL" ]; then
-			echo -e "specify both from and to emails\n" >&2
+			echo -e "ERROR: specify both from and to emails\n" >&2
 			return 1
 		fi
 		if [ ! "$AWS_PROFILE" ]; then
-			echo -e "specify an AWS CLI profile when using the email option\n" >&2
+			echo -e "ERROR: specify an AWS CLI profile when using the email option\n" >&2
 			return 1
 		fi
 		EMAIL=true
@@ -475,7 +493,7 @@ function downloadRemoteArchiveFiles() {
         # get a list of the gzipped archives and download  them
         declare -A a="( $(gdriveListFiles $folder_id "${DATE}.*.gz$" application/gzip | awk '{ printf "[%s]=%s ", $3, $1  }') )"
 
-        if [[ "$RESTORE_OPTION" =~ all|database ]];then
+        if [[ "$ARCHIVE_OPTION" =~ all|database ]];then
             key=${DATABASE_ARCHIVE_FILE##*/}
             id=${a[${key}]}
             log "downloading database archive file $id to $DATABASE_ARCHIVE_FILE"
@@ -483,7 +501,7 @@ function downloadRemoteArchiveFiles() {
                 errorExit "remote download failed"
             fi  
         fi
-        if [[ "$RESTORE_OPTION" =~ all|system ]];then
+        if [[ "$ARCHIVE_OPTION" =~ all|system ]];then
             key=${SYSTEM_ARCHIVE_FILE##*/}
             id=${a[${key}]}
             log "downloading system archive file $id to $SYSTEM_ARCHIVE_FILE"
@@ -491,7 +509,7 @@ function downloadRemoteArchiveFiles() {
                 errorExit "remote download failed"
             fi  
         fi
-        if [[ "$RESTORE_OPTION" =~ all|content ]];then
+        if [[ "$ARCHIVE_OPTION" =~ all|content ]];then
             key=${CONTENT_ARCHIVE_FILE##*/}
             id=${a[${key}]}
             log "downloading content archive file $id to $CONTENT_ARCHIVE_FILE"
@@ -542,7 +560,7 @@ function restoreContentArchive() {
 
 # main
 export SCRIPT=$(basename $0)
-while getopts "rsw:l:b:t:f:p:m:g:c:a:R:o:" o; do
+while getopts "rsw:l:b:t:f:p:m:g:c:a:R:o:d:" o; do
         case "$o" in
         s) export SILENT=true ;; # disable screen output
         l) export LOG_FILE=$OPTARG ;; 
@@ -556,8 +574,9 @@ while getopts "rsw:l:b:t:f:p:m:g:c:a:R:o:" o; do
         g) export REMOTE_ROOT_DIR_ID=$OPTARG;; # google drive folder id
         c) export SERVICE_ACCOUNT_CREDENTIALS_FILE=$OPTARG;; # service account credentials file from https://console.developers.google.com/
         r) export REMOTE=true ;;
-        R) export RESTORE=true;RESTORE_DATE=$OPTARG ;;
-        o) export RESTORE_OPTION=$OPTARG ;;
+        R) export RESTORE=true;ARCHIVE_DATE=$OPTARG ;;
+        o) export ARCHIVE_OPTION=$OPTARG ;;
+        d) export DOWNLOAD=true;ARCHIVE_DATE=$OPTARG ;;
         *) usage ;;
         esac
 done
@@ -587,8 +606,8 @@ export WARNING_FLAG # when true send warning email about non critical errors
 export SILENT
 
 # working directory for backup files - when restoring use the date specified on the command line
-if [ "$RESTORE_DATE" ];then
-    DATE=$RESTORE_DATE
+if [ "$ARCHIVE_DATE" ];then
+    DATE=$ARCHIVE_DATE
 else
     DATE=$(date '+%Y-%m-%d') 
 fi
@@ -622,6 +641,16 @@ if [ ! -w $BACKUP_ROOT_DIR ]; then # both restore and backup options need to be 
     errorExit "Can't write to backup directory: $BACKUP_ROOT_DIR"
 fi
 
+# download backup archives
+if [ "DOWNLOAD" ] ; then
+    log "downloading remote archive files"
+    if  ! downloadRemoteArchiveFiles ; then
+        errorExit "Could not download remote archive files"
+    fi
+    log "download complete"
+    exit
+fi
+
 # restore wordpress from backup
 if [ "$RESTORE" ];then
     if [ "$REMOTE" ]; then 
@@ -631,9 +660,9 @@ if [ "$RESTORE" ];then
         fi
     fi
 
-    log "Restoring wordpress archive: $RESTORE_DATE"
+    log "Restoring wordpress archive: $ARCHIVE_DATE"
 
-    if [[ "$RESTORE_OPTION" =~ all|database ]] ; then
+    if [[ "$ARCHIVE_OPTION" =~ all|database ]] ; then
         if ! restoreDatabaseArchive ; then
             errorExit "could not restore database archive" 
         else
@@ -641,7 +670,7 @@ if [ "$RESTORE" ];then
         fi
     fi
 
-    if [[ "$RESTORE_OPTION" =~ all|system ]]; then
+    if [[ "$ARCHIVE_OPTION" =~ all|system ]]; then
         if ! restoreSystemArchive ; then
             errorExit "could not restore system archive" 
         else
@@ -649,7 +678,7 @@ if [ "$RESTORE" ];then
         fi
     fi
 
-    if [[ "$RESTORE_OPTION" =~ all|content ]]; then
+    if [[ "$ARCHIVE_OPTION" =~ all|content ]]; then
         if ! restoreContentArchive ; then
             errorExit "could not restore content archive" 
         else

@@ -7,7 +7,7 @@
 trap "errorExit process terminated" SIGTERM SIGINT SIGQUIT SIGKILL
 
 function usage() {
-    echo "Usage: $SCRIPT  -l log file -b basename -m max snapshots -i lightsail instance name -a aws profile [ -s (silent) ] [ -f email from -t  email to ]
+    echo "Usage: $SCRIPT  -l log file -b basename for created snapshot -m max snapshots -i lightsail instance name -a aws profile [ -s (silent) ] [ -f email from -t  email to ]
 
     - new snapshots will be named basename_YYYY_MMTDD_HH_MI
     - the most recent snapshots matching this pattern will be retained up to the max specified

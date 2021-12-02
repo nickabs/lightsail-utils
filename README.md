@@ -1,8 +1,8 @@
 
 
-- [wp-backup.sh](#wp-backupsh)
-  * [EXAMPLE - backup](#example---backup-wordpress)
-  * [EXAMPLE - restore](#example---restore-wordpress)
+- [ghost-backup.sh](#ghost-backupsh)
+  * [EXAMPLE - backup](#example---backup-ghost)
+  * [EXAMPLE - restore](#example---restore-ghost)
   * [Remote storage - service accounts](#remote-storage---service-accounts)
     + [service account storage](#service-account-storage)
     + [authentication](#authentication)
@@ -16,36 +16,42 @@
 
 
 # lightsail utils 
-utility scripts for Wordpress websites deployed on a linux [AWS Lightsail](https://aws.amazon.com/lightsail/) instance.
+utility scripts for [ghost](https://ghost.org/) websites deployed on a linux [AWS Lightsail](https://aws.amazon.com/lightsail/) instance.
 
-* [wp-backup.sh](https://github.com/nickabs/lightsail-utils#wp-backupsh): Create a daily archive of Wordpress database, systems files and uploaded content with an option to store the backups remotely on Google Drive
+* [ghost-backup.sh](https://github.com/nickabs/lightsail-utils#ghost-backupsh): Create a daily archive of the Ghost database, config files and content.  Backup archives can be kept on the server or stored remotely on Google Drive.
 * [lightsail-snapshot.sh](https://github.com/nickabs/lightsail-utils#lightsail-snapshotsh): Enable automatic daily snapshots of your AWS lightsail instance (this is an alternative to the AWS Lightsail _Automatic Snapshots_ feature, which is hard coded to retain 7 snapshots).
 
  
 ***
-# wp-backup.sh
+# ghost-backup.sh
 
 The script creates 3 gzip archives and places them in a subdirectory named YYYY-YY-DD, e.g
 ```
 2021-02-19/2021-02-19-database.sql.gz # mysql database dump
-2021-02-19/2021-02-19-content.tar.gz # uploaded content (images etc)
-2021-02-10/2021-02-19-system.tar.gz # system files, including plugins
+2021-02-19/2021-02-19-content.tar.gz # content (themses, images etc)
+2021-02-10/2021-02-19-config.gz # Ghost config file
 ```
-the script will deletes the oldest archive directories up to the specified maximum number of retained snapshots.  
+the script deletes the oldest archive directories up to the specified maximum number of retained snapshots.  
 
-note the system archive contains the WP config file (wp-config.php) and this file contains the Wordpress database access credentials in plain text.  There is an option to encrypt this archive file if you are going to keep it in a remote location.
+note the backup contains credtentials:
+* the ghost config file (config.production.json) is included and this contains the Ghost database access credentials in plain text.
+* the database dump contains the user table which holds hashed passwords for staff members on the Ghost site.
+There is an option to encrypt the config and database archives if you are going to keep them in a remote location.
 
-## EXAMPLE - backup wordpress
+
+## EXAMPLE - backup Ghost
+backup a ghost installation installed in /var/www/ghost and copy the archives to a google drive folder. A maximum of 7 archives will be kept
 ```
-wp-backup.sh -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f wp-backup@example.com -t example@mail.com -a LightsailAdmin
+ghost-backup.sh -w /var/www/ghost -l wp.log -b /data/backups/ghost -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f ghost-backup@example.com -t example@mail.com -a LightsailAdmin
 
 ```
-## EXAMPLE - restore wordpress
+## EXAMPLE - restore Ghost
+restore the config, database and content archives from /data/backups/ghost/2021-02-01
 ```
-wp-backup.s -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -R 2021-02-01 -o all
+ghost-backup.s -w /var/www/ghost -l wp.log -b /data/backups/ghost -R 2021-02-01 -o all
 
 ```
-when using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified google drive
+when using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified google drive first
 
 See usage statement for more details
 
@@ -73,6 +79,7 @@ Service accounts are associated with private/public key pairs and these are used
 
 ### authorisation
 The service account email address and private key in the credentials file are used to authorise the account to access the Google Drive API using [Oauth2.0](https://developers.google.com/identity/protocols/oauth2/service-account).
+
 ![server to server authorisation flow](https://developers.google.com/identity/protocols/oauth2/images/flows/jwt.png)
 
 The backup script creates a JWT _request token_ that is sent to Google's Oauth 2.0 service.  Assuming Google can validate that the token was signed by the private key associated with the public key it holds for the account it will return an _access token_.  The access token is valid for one hour and is used to access the resources requested in the scope specified in the original JWT access request (the backup script requests the scope needed to read/write to the service account's Google Drive storage).
@@ -87,7 +94,7 @@ Although the service account can't access your personal user data, anyone in pos
 
 The script uses various linux utilities that will be found on any modern linux distro (it was developed on unbuntu 20.04)
 
-the script has been tested with a Wordpress instance using **mysql**.  The database extract is done with **mysqldump**.
+the script has been tested with a Ghost instance using **mysql**.  The database extract is done with **mysqldump**.
 
 **jq** is used to parse the json returned by the Google APIs.  If jq is not available for your distribution you can find installation instructions on the [github project](https://stedolan.github.io/jq/)
 

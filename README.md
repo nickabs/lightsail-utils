@@ -33,9 +33,12 @@ The script creates 3 gzip archives and places them in a subdirectory named YYYY-
 ```
 the script deletes the oldest archive directories up to the specified maximum number of retained snapshots.  
 
-note the backup contains credtentials:
+See usage statement for more details.
+
+note the backup contains account credtentials:
 * the ghost config file (config.production.json) is included and this contains the Ghost database access credentials in plain text.
-* the database dump contains the user table which holds hashed passwords for staff members on the Ghost site.
+* the database dump contains the user table which holds hashed passwords and email addresses for staff members on the Ghost site.
+
 There is an option to encrypt the config and database archives if you are going to keep them in a remote location.
 
 
@@ -53,7 +56,6 @@ ghost-backup.s -w /var/www/ghost -l wp.log -b /data/backups/ghost -R 2021-02-01 
 ```
 when using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified google drive first
 
-See usage statement for more details
 
 ## Remote storage - service accounts
 The remote storage option will upload the backup archives to Google Drive using a [service account](https://cloud.google.com/iam/docs/service-accounts).  Service account are created in the API section of the [Google Developer Console](https://console.developers.google.com/apis) and are identified by an email address e.g example@project-id.iam.gserviceaccount.com.  These accounts have their own storage quota on Google Drive (as of early 2021, the quota is 15 GiB).

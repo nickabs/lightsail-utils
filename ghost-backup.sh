@@ -7,27 +7,27 @@ set -o errtrace
 trap "errorExit process terminated" SIGTERM SIGINT SIGQUIT SIGKILL ERR
 
 function usage() {
-    echo "Usage: $SCRIPT  -l log file -w wordpress dir -b backup dir
+    echo "Usage: $SCRIPT  -l log file -w ghost dir -b backup dir
         [ -m days (max daily backups to retain) ]
         [ -s (silent) ]
-        [ -p passphrase ] (when specified this will be used as a key to encrypt the systems archive )
+        [ -p passphrase ] (when specified this will be used as a key to encrypt the database and config archives )  
         [ -f email from -t email to -a aws profile name ]
-		[ -r remote storage -g google drive id -c credential json file for service account]
-        [ -R YYYY-MM-DD (restore from backup directory) -o all|system|content|database (specifies which archives to restore) ]
-        [ -d YYYY-MM-DD -o all|system|content|database (used with the -r option, download the remote backup archives without restoring ) ]
+		[ -r remote storage -g google drive id -c credential config file for service account]
+        [ -R YYYY-MM-DD (restore from backup directory) -o all|config|content|database (specifies which archives to restore) ]
+        [ -d YYYY-MM-DD -o all|config|content|database (used with the -r option, download the remote backup archives without restoring ) ] 
 
         EXAMPLE
-        1. backup wordpress files and copy to remote storage (note when specifying remote storage the backups are managed in the specified google drive and the local copy is deleted)
+        1. backup ghost files and copy to remote storage (note when specifying remote storage the backups are managed in the specified google drive and the local copy is deleted)
 
-        $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f lightsail-snapshot@example.com -t example@mail.com -a LightsailSnapshotAdmin
+        $SCRIPT -w /var/www/ghost -l ghost.log -b /data/backups/ghost -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f lightsail-snapshot@example.com -t example@mail.com -a LightsailSnapshotAdmin
 
         2. to restore the backup from 1st February 2021 
-        $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -R 2021-02-01 -o all
+        $SCRIPT -w /var/www/ghost -l ghost.log -b /data/backups/ghost -R 2021-02-01 -o all
 
         when using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified google drive
 
         3. get the remote backup archives from 1st February 2021 but do not restore them
-        $SCRIPT -w /var/www/wordpress -l wp.log -b /data/backups/wordpress -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -d 2021-02-01 -o all
+        $SCRIPT -w /var/www/ghost -l ghost.log -b /data/backups/ghost -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -d 2021-02-01 -o all
 
         see https://github.com/nickabs/lightsail-utils for more information
         " 1>&2
@@ -40,8 +40,8 @@ function checkOptions() {
 		return 1
 	fi
 
-    if [ ! "$WP_ROOT_DIR" ]; then
-        echo -e "ERROR: you must specify the wordpress root directory\n" >&2
+    if [ ! "$GHOST_ROOT_DIR" ]; then
+        echo -e "ERROR: you must specify the ghost root directory\n" >&2
 		return 1
 	fi
 
@@ -60,8 +60,8 @@ function checkOptions() {
         return 1
     fi
 
-    if [ "$WP_ROOT_DIR" == "$BACKUP_ROOT_DIR" ]; then
-        echo -e "ERROR: can't create backup files in the wordpress root directory\n" >&2 
+    if [ "$GHOST_ROOT_DIR" == "$BACKUP_ROOT_DIR" ]; then
+        echo -e "ERROR: can't create backup files in the ghost root directory\n" >&2 
         return 1
     fi
 
@@ -90,8 +90,8 @@ function checkOptions() {
     fi
 
     if [ "$RESTORE" ] || [ "$DOWNLOAD" ]; then 
-        if [[ ! "$ARCHIVE_OPTION" =~ ^all$|^system$|^database$|^content$ ]];then
-            echo -e "ERROR: you must specify one of these options with the -o flag : all, system, database or content\n" >&2
+        if [[ ! "$ARCHIVE_OPTION" =~ ^all$|^json$|^database$|^content$ ]];then
+            echo -e "ERROR: you must specify one of these options with the -o flag : all, json, database or content\n" >&2
             return 1
         fi
     fi
@@ -172,27 +172,37 @@ function daysBetween() {
 }
 
 function createDatabaseArchive() {
-	local db_name=$(gawk 'BEGIN {RS=";" } /DB_NAME/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
-	local user=$(gawk 'BEGIN {RS=";" } /DB_USER/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
-	local host=$(gawk 'BEGIN {RS=";" } /DB_HOST/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
+
+    local_client=$(jq -r '.database.client' $GHOST_CONFIG_FILE)
+    if [ -z "$local_client" ]; then
+        log "can't  read the database client from $GHOST_CONFIG_FIILE"
+        return 1
+    fi
+
+    if [ "$local_client" != "mysql" ];then
+        log "database.client is $local_client.  This script only supports mysql"
+        return 1
+    fi
+
+    local database=$(jq -r '.database.connection.database' $GHOST_CONFIG_FILE)
+    local user=$(jq -r '.database.connection.user' $GHOST_CONFIG_FILE)
+    local host=$(jq -r '.database.connection.host' $GHOST_CONFIG_FILE)
 
     # setting this env variable avoids supplying password on command line
-    export MYSQL_PWD=$(gawk 'BEGIN {RS=";" } /DB_PASSWORD/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
-	mysqldump --no-tablespaces --user=$user --host=$host $db_name  | gzip > $DATABASE_ARCHIVE_FILE
+    export MYSQL_PWD=$(jq -r '.database.connection.password' $GHOST_CONFIG_FILE)
+    
+	mysqldump --no-tablespaces --user=$user --host=$host $database  | gzip > $DATABASE_ARCHIVE_FILE
 }
 
 function createContentArchive() {
-	# backup the user content directory
-	tar czf $CONTENT_ARCHIVE_FILE --transform="s,${WP_ROOT_DIR#/}/,,"  $WP_ROOT_DIR/wp-content
+	# backup the content directory
+	tar czf $CONTENT_ARCHIVE_FILE --transform="s,${GHOST_ROOT_DIR#/}/,,"  $GHOST_ROOT_DIR/content
 }
 
-function createSystemArchive() {
-	# backup the system files
-	tar czf $SYSTEM_ARCHIVE_FILE --transform="s,${WP_ROOT_DIR#/}/,," --exclude $WP_ROOT_DIR/wp-content $WP_ROOT_DIR 
+function createConfigArchive() {
+	# copy the config Config file
 
-	if [ ! -z "$PASSPHRASE" ] ; then
-		gpg --symmetric --passphrase $PASSPHRASE --batch -o ${SYSTEM_ARCHIVE_FILE}.gpg  $SYSTEM_ARCHIVE_FILE && rm $SYSTEM_ARCHIVE_FILE
-	fi
+    gzip -c $GHOST_CONFIG_FILE > $CONFIG_ARCHIVE_FILE
 }
 
 # removes all directories older than max retention days - for local backups this is run *after* a backup has been created sucessfully
@@ -501,11 +511,11 @@ function downloadRemoteArchiveFiles() {
                 errorExit "remote download failed"
             fi  
         fi
-        if [[ "$ARCHIVE_OPTION" =~ all|system ]];then
-            key=${SYSTEM_ARCHIVE_FILE##*/}
+        if [[ "$ARCHIVE_OPTION" =~ all|config ]];then
+            key=${CONFIG_ARCHIVE_FILE##*/}
             id=${a[${key}]}
-            log "downloading system archive file $id to $SYSTEM_ARCHIVE_FILE"
-            if ! gdriveDownloadFile $id $SYSTEM_ARCHIVE_FILE ; then
+            log "downloading config archive file $id to $CONFIG_ARCHIVE_FILE"
+            if ! gdriveDownloadFile $id $CONFIG_ARCHIVE_FILE ; then
                 errorExit "remote download failed"
             fi  
         fi
@@ -532,33 +542,35 @@ function restoreDatabaseArchive() {
         return 1
     fi
 
-	local db_name=$(gawk 'BEGIN {RS=";" } /DB_NAME/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
-	local user=$(gawk 'BEGIN {RS=";" } /DB_USER/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
-	local host=$(gawk 'BEGIN {RS=";" } /DB_HOST/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
+    local database=$(jq -r '.database.connection.database' $GHOST_CONFIG_FILE)
+    local user=$(jq -r '.database.connection.user' $GHOST_CONFIG_FILE)
+    local host=$(jq -r '.database.connection.host' $GHOST_CONFIG_FILE)
 
     # setting this env variable avoids supplying password on command line
-    export MYSQL_PWD=$(gawk 'BEGIN {RS=";" } /DB_PASSWORD/ {print gensub(/.*,[ \t]*\047(.*)\047[ \t]*)/,"\\1","g")}' < $WP_CONFIG_FILE)
-
+    export MYSQL_PWD=$(jq -r '.database.connection.password' $GHOST_CONFIG_FILE)
+    
     f="${DATABASE_ARCHIVE_FILE%.gz}"
     if [ ! -f "$f" ]; then
         log "can't open unzipped archive $f"
         return 1
     fi
     log "running $f on host: $host user: $user database: $db_name"
-    mysql -h $host -u $user $db_name <  $f
+    mysql -h $host -u $user $database <  $f
 }
 
-function restoreSystemArchive() {
-    log "extracting $SYSTEM_ARCHIVE_FILE to $WP_ROOT_DIR"
-    tar xf $SYSTEM_ARCHIVE_FILE -C $WP_ROOT_DIR --same-owner
+function restoreConfigArchive() {
+    log "unzippling $CONFIG_ARCHIVE_FILE to $GHOST_ROOT_DIR"
+    gunzip -c $CONFIG_ARCHIVE_FILE > $GHOST_CONFIG_FILE
 }
 
 function restoreContentArchive() {
-    log "extracting $CONTENT_ARCHIVE_FILE to $WP_ROOT_DIR"
-    tar xf $CONTENT_ARCHIVE_FILE -C $WP_ROOT_DIR --same-owner
+    log "extracting $CONTENT_ARCHIVE_FILE to $GHOST_ROOT_DIR"
+    tar xf $CONTENT_ARCHIVE_FILE -C $GHOST_ROOT_DIR --same-owner
 }
 
 # main
+
+# todo passphrase on restore
 export SCRIPT=$(basename $0)
 while getopts "rsw:l:b:t:f:p:m:g:c:a:R:o:d:" o; do
         case "$o" in
@@ -569,7 +581,7 @@ while getopts "rsw:l:b:t:f:p:m:g:c:a:R:o:d:" o; do
         f) export FROM_EMAIL=$OPTARG ;;
         t) export TO_EMAIL=$OPTARG ;;
         a) export AWS_PROFILE=$OPTARG ;;
-        w) export WP_ROOT_DIR=${OPTARG%/} ;;
+        w) export GHOST_ROOT_DIR=${OPTARG%/} ;;
         p) export PASSPHRASE=$OPTARG ;;
         g) export REMOTE_ROOT_DIR_ID=$OPTARG;; # google drive folder id
         c) export SERVICE_ACCOUNT_CREDENTIALS_FILE=$OPTARG;; # service account credentials file from https://console.developers.google.com/
@@ -612,16 +624,16 @@ else
     DATE=$(date '+%Y-%m-%d') 
 fi
 
-WP_CONFIG_FILE="${WP_ROOT_DIR}/wp-config.php"
+GHOST_CONFIG_FILE="${GHOST_ROOT_DIR}/config.production.json"
 
-if [ ! -r $WP_CONFIG_FILE ]; then
-    errorExit "Can't read WP config file: $WP_CONFIG_FILE"
+if [ ! -r $GHOST_CONFIG_FILE ]; then
+    errorExit "Can't read ghost config file: $GHOST_CONFIG_FILE"
 fi
 
 BACKUP_DIR=${BACKUP_ROOT_DIR}/${DATE}
 DATABASE_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-database.sql.gz 
 CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz 
-SYSTEM_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-system.tar.gz 
+CONFIG_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-json.gz 
 
 if [ "$REMOTE" ]; then
 	if [ ! -r "$SERVICE_ACCOUNT_CREDENTIALS_FILE" ] ; then
@@ -651,7 +663,8 @@ if [ "$DOWNLOAD" ] ; then
     exit
 fi
 
-# restore wordpress from backup
+
+# restore ghost from backup
 if [ "$RESTORE" ];then
     if [ "$REMOTE" ]; then 
         log "downloading remote archive files"
@@ -660,7 +673,7 @@ if [ "$RESTORE" ];then
         fi
     fi
 
-    log "Restoring wordpress archive: $ARCHIVE_DATE"
+    log "Restoring ghost archive: $ARCHIVE_DATE"
 
     if [[ "$ARCHIVE_OPTION" =~ all|database ]] ; then
         if ! restoreDatabaseArchive ; then
@@ -670,11 +683,11 @@ if [ "$RESTORE" ];then
         fi
     fi
 
-    if [[ "$ARCHIVE_OPTION" =~ all|system ]]; then
-        if ! restoreSystemArchive ; then
-            errorExit "could not restore system archive" 
+    if [[ "$ARCHIVE_OPTION" =~ all|config ]]; then
+        if ! restoreConfigArchive ; then
+            errorExit "could not restore config archive" 
         else
-            log "system archive restored"
+            log "config archive restored"
         fi
     fi
 
@@ -710,9 +723,26 @@ if ! createContentArchive ; then
     errorExit "could not create content archive"
 fi
 
-log "Creating system archive: $SYSTEM_ARCHIVE_FILE"
-if ! createSystemArchive ; then
-    errorExit "could not create system archive"
+log "Creating config archive: $CONFIG_ARCHIVE_FILE"
+if ! createConfigArchive ; then
+    errorExit "could not create config archive"
+fi
+
+
+if [ ! -z "$PASSPHRASE" ] ; then
+
+    log "encrypting $CONFIG_ARCHIVE_FILE"
+    gpg --symmetric --passphrase $PASSPHRASE --batch -o ${CONFIG_ARCHIVE_FILE}.gpg  $CONFIG_ARCHIVE_FILE && rm $CONFIG_ARCHIVE_FILE
+    if [ $? -ne 0 ]; then
+        errorExit "could not encrypt $CONFIG_ARCHIVE_FILE"
+    fi
+
+    log "encrypting $DATABASE_ARCHIVE_FILE"
+    gpg --symmetric --passphrase $PASSPHRASE --batch -o ${DATABASE_ARCHIVE_FILE}.gpg  $DATABASE_ARCHIVE_FILE && rm $DATABASE_ARCHIVE_FILE
+    if [ $? -ne 0 ]; then
+        errorExit "could not encrypt $DATABASE_ARCHIVE_FILE"
+    fi
+
 fi
 
 # remove old local files and exit 

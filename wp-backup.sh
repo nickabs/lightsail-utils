@@ -642,7 +642,7 @@ if [ ! -w $BACKUP_ROOT_DIR ]; then # both restore and backup options need to be 
 fi
 
 # download backup archives
-if [ "DOWNLOAD" ] ; then
+if [ "$DOWNLOAD" ] ; then
     log "downloading remote archive files"
     if  ! downloadRemoteArchiveFiles ; then
         errorExit "Could not download remote archive files"

@@ -90,8 +90,8 @@ function checkOptions() {
     fi
 
     if [ "$RESTORE" ] || [ "$DOWNLOAD" ]; then 
-        if [[ ! "$ARCHIVE_OPTION" =~ ^all$|^json$|^database$|^content$ ]];then
-            echo -e "ERROR: you must specify one of these options with the -o flag : all, json, database or content\n" >&2
+        if [[ ! "$ARCHIVE_OPTION" =~ ^all$|^config$|^database$|^content$ ]];then
+            echo -e "ERROR: you must specify one of these options with the -o flag : all, config, database or content\n" >&2
             return 1
         fi
     fi

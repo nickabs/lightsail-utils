@@ -1,4 +1,10 @@
 
+# lightsail utils 
+utility scripts for [ghost](https://ghost.org/) websites deployed on a linux [AWS Lightsail](https://aws.amazon.com/lightsail/) instance.
+
+* [ghost-backup.sh](https://github.com/nickabs/lightsail-utils#ghost-backupsh): Create a daily archive of the Ghost database, config files and content.  Backup archives can be kept on the server or stored remotely on Google Drive.
+* [lightsail-snapshot.sh](https://github.com/nickabs/lightsail-utils#lightsail-snapshotsh): Enable automatic daily snapshots of your AWS lightsail instance (this is an alternative to the AWS Lightsail _Automatic Snapshots_ feature, which is hard coded to retain 7 snapshots).
+
 
 - [ghost-backup.sh](#ghost-backupsh)
   * [EXAMPLE - backup](#example---backup-ghost)
@@ -14,12 +20,6 @@
   * [Dependencies](#dependencies)
 - [Schedule a timer to run the script](#schedule-a-timer-to-run-the-script)
 
-
-# lightsail utils 
-utility scripts for [ghost](https://ghost.org/) websites deployed on a linux [AWS Lightsail](https://aws.amazon.com/lightsail/) instance.
-
-* [ghost-backup.sh](https://github.com/nickabs/lightsail-utils#ghost-backupsh): Create a daily archive of the Ghost database, config files and content.  Backup archives can be kept on the server or stored remotely on Google Drive.
-* [lightsail-snapshot.sh](https://github.com/nickabs/lightsail-utils#lightsail-snapshotsh): Enable automatic daily snapshots of your AWS lightsail instance (this is an alternative to the AWS Lightsail _Automatic Snapshots_ feature, which is hard coded to retain 7 snapshots).
 
  
 ***

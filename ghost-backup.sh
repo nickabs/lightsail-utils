@@ -500,22 +500,31 @@ function downloadRemoteArchiveFiles() {
             errorExit "Can't find remote backup directory: $DATE"
         fi
 
-        # get a list of the gzipped archives and download  them
-        declare -A a="( $(gdriveListFiles $folder_id "${DATE}.*.gz$" application/gzip | awk '{ printf "[%s]=%s ", $3, $1  }') )"
+        # get a list of the gzipped archives 
+        # The array is indexed by file name and the value is the google fileid
+        declare -A a="( $(gdriveListFiles $folder_id "${DATE}.*.gz.*$" application/gzip | awk '{ printf "[%s]=%s ", $3, $1  }') )"
+
+        # if the returned filenames have  *.gz.gpg suffixes then the 
+        # config and database files are encrypted
+        if [[ "${!a[@]}" =~ ".gz.gpg" ]];then
+            log "encrypted files found"
+            local suffix=".gpg"
+        fi
 
         if [[ "$ARCHIVE_OPTION" =~ all|database ]];then
             key=${DATABASE_ARCHIVE_FILE##*/}
-            id=${a[${key}]}
-            log "downloading database archive file $id to $DATABASE_ARCHIVE_FILE"
-            if ! gdriveDownloadFile $id $DATABASE_ARCHIVE_FILE ; then
+            id=${a[${key}${suffix}]}
+            log "downloading database archive file $id to ${DATABASE_ARCHIVE_FILE}${suffix}"
+            if ! gdriveDownloadFile $id ${DATABASE_ARCHIVE_FILE}${suffix} ; then
                 errorExit "remote download failed"
             fi  
         fi
         if [[ "$ARCHIVE_OPTION" =~ all|config ]];then
             key=${CONFIG_ARCHIVE_FILE##*/}
-            id=${a[${key}]}
-            log "downloading config archive file $id to $CONFIG_ARCHIVE_FILE"
-            if ! gdriveDownloadFile $id $CONFIG_ARCHIVE_FILE ; then
+            id=${a[${key}${suffix}]}
+
+            log "downloading config archive file $id to ${CONFIG_ARCHIVE_FILE}${suffix}"
+            if ! gdriveDownloadFile $id ${CONFIG_ARCHIVE_FILE}${suffix}; then
                 errorExit "remote download failed"
             fi  
         fi
@@ -531,6 +540,21 @@ function downloadRemoteArchiveFiles() {
 
 function restoreDatabaseArchive() {
     
+    # check for an encrpted file
+    local suffix=".gpg"
+
+    if [ -f ${DATABASE_ARCHIVE_FILE}${suffix} ];then
+        log "encrypted database archive found"
+        if [ -z "$PASSPHRASE" ];then
+            log "you must specify a passphrase to decrypt the database archive"
+            return 1
+        fi
+
+        if ! gpg --decrypt --passphrase $PASSPHRASE --batch ${DATABASE_ARCHIVE_FILE}${suffix} > $DATABASE_ARCHIVE_FILE ; then
+            log "could not decrypt file - check your passphrase"
+            return 1
+        fi
+    fi
     if [ ! -f $DATABASE_ARCHIVE_FILE ]; then
         log "can't find $DATABASE_ARCHIVE_FILE"
         return 1
@@ -559,6 +583,21 @@ function restoreDatabaseArchive() {
 }
 
 function restoreConfigArchive() {
+    # check for an encrpted file
+    local suffix=".gpg"
+
+    if [ -f ${CONFIG_ARCHIVE_FILE}${suffix} ];then
+        log "encrypted config archive found"
+        if [ -z "$PASSPHRASE" ];then
+            log "you must specify a passphrase to decrypt the config archive"
+            return 1
+        fi
+
+        if ! gpg --decrypt --passphrase $PASSPHRASE --batch ${CONFIG_ARCHIVE_FILE}${suffix} > $CONFIG_ARCHIVE_FILE ; then
+            log "could not decrypt file - check your passphrase"
+            return 1
+        fi
+    fi
     log "unzippling $CONFIG_ARCHIVE_FILE to $GHOST_CONFIG_FILE"
     gunzip -f -c $CONFIG_ARCHIVE_FILE > $GHOST_CONFIG_FILE
 }
@@ -570,7 +609,6 @@ function restoreContentArchive() {
 
 # main
 
-# todo passphrase on restore
 export SCRIPT=$(basename $0)
 while getopts "rsw:l:b:t:f:p:m:g:c:a:R:o:d:" o; do
         case "$o" in
@@ -677,6 +715,7 @@ if [ "$RESTORE" ];then
     fi
 
     log "Restoring ghost archive: $ARCHIVE_DATE"
+
 
     if [[ "$ARCHIVE_OPTION" =~ all|database ]] ; then
         if ! restoreDatabaseArchive ; then

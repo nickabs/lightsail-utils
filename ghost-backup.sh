@@ -537,7 +537,7 @@ function restoreDatabaseArchive() {
     fi
 
     log "unzipping $DATABASE_ARCHIVE_FILE"
-    if ! gunzip $DATABASE_ARCHIVE_FILE ; then
+    if ! gunzip -f $DATABASE_ARCHIVE_FILE ; then
         log "can't unzip $DATABASE_ARCHIVE_FILE"
         return 1
     fi
@@ -554,13 +554,13 @@ function restoreDatabaseArchive() {
         log "can't open unzipped archive $f"
         return 1
     fi
-    log "running $f on host: $host user: $user database: $db_name"
+    log "running $f on host: $host user: $user database: $database"
     mysql -h $host -u $user $database <  $f
 }
 
 function restoreConfigArchive() {
-    log "unzippling $CONFIG_ARCHIVE_FILE to $GHOST_ROOT_DIR"
-    gunzip -c $CONFIG_ARCHIVE_FILE > $GHOST_CONFIG_FILE
+    log "unzippling $CONFIG_ARCHIVE_FILE to $GHOST_CONFIG_FILE"
+    gunzip -f -c $CONFIG_ARCHIVE_FILE > $GHOST_CONFIG_FILE
 }
 
 function restoreContentArchive() {
@@ -634,6 +634,9 @@ BACKUP_DIR=${BACKUP_ROOT_DIR}/${DATE}
 DATABASE_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-database.sql.gz 
 CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz 
 CONFIG_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-json.gz 
+
+echo "============================================" >>$LOG_FILE
+log $(printf "%s %s starting $SCRIPT")
 
 if [ "$REMOTE" ]; then
 	if [ ! -r "$SERVICE_ACCOUNT_CREDENTIALS_FILE" ] ; then

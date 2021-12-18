@@ -195,8 +195,12 @@ function createDatabaseArchive() {
 }
 
 function createContentArchive() {
+    local root_dir=${GHOST_CONTENT_DIR%/*}
+
 	# backup the content directory
-	tar czf $CONTENT_ARCHIVE_FILE --transform="s,${GHOST_ROOT_DIR#/}/,,"  $GHOST_ROOT_DIR/content
+    # the --transform statement remvoves all but the final subdirectory from the ghost content directory
+    # e.g if the content dir is /var/tmp/ghost/content the paths in the archive will start content/ 
+	tar czf $CONTENT_ARCHIVE_FILE --transform="s,^${root_dir#/}/,,"  $GHOST_CONTENT_DIR
 }
 
 function createConfigArchive() {
@@ -603,8 +607,17 @@ function restoreConfigArchive() {
 }
 
 function restoreContentArchive() {
-    log "extracting $CONTENT_ARCHIVE_FILE to $GHOST_ROOT_DIR"
-    tar xf $CONTENT_ARCHIVE_FILE -C $GHOST_ROOT_DIR --same-owner
+    log "extracting $CONTENT_ARCHIVE_FILE to $GHOST_CONTENT_DIR"
+
+    # the archive paths include the final subdirectory in the ghost content directory
+    local root_dir=${GHOST_CONTENT_DIR%/*} # remove the final directory from the restore directory
+
+    # ghost content dirs under root e.g /ghost-content will return an empty string
+    if [ -z "$root_dir" ];then
+        root_dir="/"
+    fi
+
+    tar xf $CONTENT_ARCHIVE_FILE -C $root_dir --same-owner
 }
 
 # main
@@ -672,6 +685,11 @@ BACKUP_DIR=${BACKUP_ROOT_DIR}/${DATE}
 DATABASE_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-database.sql.gz 
 CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz 
 CONFIG_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-json.gz 
+GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)
+GHOST_CONTENT_DIR=${GHOST_CONTENT_DIR%/} # in case there is a trailing / then remove it
+if [ ! -d "$GHOST_CONTENT_DIR" ]; then
+    errorExit "Can't find ghost content directory: $GHOST_CONTENT_DIR"
+fi
 
 echo "============================================" >>$LOG_FILE
 log $(printf "%s %s starting $SCRIPT")
@@ -694,7 +712,7 @@ if [ ! -w $BACKUP_ROOT_DIR ]; then # both restore and backup options need to be 
     errorExit "Can't write to backup directory: $BACKUP_ROOT_DIR"
 fi
 
-# download backup archives
+# download backup archives and then exit (if download option has been specified)
 if [ "$DOWNLOAD" ] ; then
     log "downloading remote archive files"
     if  ! downloadRemoteArchiveFiles ; then
@@ -703,7 +721,6 @@ if [ "$DOWNLOAD" ] ; then
     log "download complete"
     exit
 fi
-
 
 # restore ghost from backup
 if [ "$RESTORE" ];then
@@ -715,7 +732,6 @@ if [ "$RESTORE" ];then
     fi
 
     log "Restoring ghost archive: $ARCHIVE_DATE"
-
 
     if [[ "$ARCHIVE_OPTION" =~ all|database ]] ; then
         if ! restoreDatabaseArchive ; then
@@ -769,7 +785,6 @@ log "Creating config archive: $CONFIG_ARCHIVE_FILE"
 if ! createConfigArchive ; then
     errorExit "could not create config archive"
 fi
-
 
 if [ ! -z "$PASSPHRASE" ] ; then
 

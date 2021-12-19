@@ -195,17 +195,12 @@ function createDatabaseArchive() {
 }
 
 function createContentArchive() {
-    local root_dir=${GHOST_CONTENT_DIR%/*}
-
-	# backup the content directory
-    # the --transform statement remvoves all but the final subdirectory from the ghost content directory
-    # e.g if the content dir is /var/tmp/ghost/content the paths in the archive will start content/ 
-	tar czf $CONTENT_ARCHIVE_FILE --transform="s,^${root_dir#/}/,,"  $GHOST_CONTENT_DIR
+	# backup the content directory with archive paths relative to the content dir
+	tar czf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR .
 }
 
 function createConfigArchive() {
 	# copy the config Config file
-
     gzip -c $GHOST_CONFIG_FILE > $CONFIG_ARCHIVE_FILE
 }
 
@@ -609,15 +604,7 @@ function restoreConfigArchive() {
 function restoreContentArchive() {
     log "extracting $CONTENT_ARCHIVE_FILE to $GHOST_CONTENT_DIR"
 
-    # the archive paths include the final subdirectory in the ghost content directory
-    local root_dir=${GHOST_CONTENT_DIR%/*} # remove the final directory from the restore directory
-
-    # ghost content dirs under root e.g /ghost-content will return an empty string
-    if [ -z "$root_dir" ];then
-        root_dir="/"
-    fi
-
-    tar xf $CONTENT_ARCHIVE_FILE -C $root_dir --same-owner
+    tar xzf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR --same-owner
 }
 
 # main
@@ -691,6 +678,8 @@ if [ ! -d "$GHOST_CONTENT_DIR" ]; then
     errorExit "Can't find ghost content directory: $GHOST_CONTENT_DIR"
 fi
 
+
+
 echo "============================================" >>$LOG_FILE
 log $(printf "%s %s starting $SCRIPT")
 
@@ -734,6 +723,7 @@ if [ "$RESTORE" ];then
     log "Restoring ghost archive: $ARCHIVE_DATE"
 
     if [[ "$ARCHIVE_OPTION" =~ all|database ]] ; then
+    log "Restoring ghost archive: $ARCHIVE_DATE"
         if ! restoreDatabaseArchive ; then
             errorExit "could not restore database archive" 
         else

@@ -674,6 +674,9 @@ CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz
 CONFIG_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-json.gz 
 GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)
 GHOST_CONTENT_DIR=${GHOST_CONTENT_DIR%/} # in case there is a trailing / then remove it
+if [[ $GHOST_CONTENT_DIR =~ ^[^/] ]];then # add root directory if content dir is relative
+    GHOST_CONTENT_DIR=${GHOST_ROOT_DIR}/$GHOST_CONTENT_DIR
+fi
 if [ ! -d "$GHOST_CONTENT_DIR" ]; then
     errorExit "Can't find ghost content directory: $GHOST_CONTENT_DIR"
 fi

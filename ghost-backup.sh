@@ -196,7 +196,7 @@ function createDatabaseArchive() {
 
 function createContentArchive() {
 	# backup the content directory with archive paths relative to the content dir
-	tar czf --exclude "*.log" $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR .
+	tar --exclude "*.log" -cf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR .
 }
 
 function createConfigArchive() {

@@ -604,7 +604,7 @@ function restoreConfigArchive() {
 function restoreContentArchive() {
     log "extracting $CONTENT_ARCHIVE_FILE to $GHOST_CONTENT_DIR"
 
-    tar xzf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR --same-owner
+    tar xf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR --same-owner
 }
 
 # main

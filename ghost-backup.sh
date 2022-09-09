@@ -664,22 +664,13 @@ fi
 
 GHOST_CONFIG_FILE="${GHOST_ROOT_DIR}/config.production.json"
 
-if [ ! -r $GHOST_CONFIG_FILE ]; then
-    errorExit "Can't read ghost config file: $GHOST_CONFIG_FILE"
-fi
+
 
 BACKUP_DIR=${BACKUP_ROOT_DIR}/${DATE}
 DATABASE_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-database.sql.gz 
 CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz 
 CONFIG_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-json.gz 
-GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)
-GHOST_CONTENT_DIR=${GHOST_CONTENT_DIR%/} # in case there is a trailing / then remove it
-if [[ $GHOST_CONTENT_DIR =~ ^[^/] ]];then # add root directory if content dir is relative
-    GHOST_CONTENT_DIR=${GHOST_ROOT_DIR}/$GHOST_CONTENT_DIR
-fi
-if [ ! -d "$GHOST_CONTENT_DIR" ]; then
-    errorExit "Can't find ghost content directory: $GHOST_CONTENT_DIR"
-fi
+
 
 
 
@@ -722,8 +713,29 @@ if [ "$RESTORE" ];then
             errorExit "Could not download remote archive files"
         fi
     fi
-
+    
     log "Restoring ghost archive: $ARCHIVE_DATE"
+    
+    if [[ "$ARCHIVE_OPTION" =~ all|config ]]; then
+        if ! restoreConfigArchive ; then
+            errorExit "could not restore config archive" 
+        else
+            log "config archive restored"
+        fi
+    fi
+    
+    if [ ! -r $GHOST_CONFIG_FILE ]; then
+        errorExit "Can't read ghost config file: $GHOST_CONFIG_FILE"
+    fi
+    
+    GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)
+    GHOST_CONTENT_DIR=${GHOST_CONTENT_DIR%/} # in case there is a trailing / then remove it
+    if [[ $GHOST_CONTENT_DIR =~ ^[^/] ]];then # add root directory if content dir is relative
+        GHOST_CONTENT_DIR=${GHOST_ROOT_DIR}/$GHOST_CONTENT_DIR
+    fi
+    if [ ! -d "$GHOST_CONTENT_DIR" ]; then
+        errorExit "Can't find ghost content directory: $GHOST_CONTENT_DIR"
+    fi
 
     if [[ "$ARCHIVE_OPTION" =~ all|database ]] ; then
     log "Restoring ghost archive: $ARCHIVE_DATE"
@@ -731,14 +743,6 @@ if [ "$RESTORE" ];then
             errorExit "could not restore database archive" 
         else
             log "database archive restored"
-        fi
-    fi
-
-    if [[ "$ARCHIVE_OPTION" =~ all|config ]]; then
-        if ! restoreConfigArchive ; then
-            errorExit "could not restore config archive" 
-        else
-            log "config archive restored"
         fi
     fi
 

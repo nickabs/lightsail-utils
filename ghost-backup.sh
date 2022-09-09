@@ -663,6 +663,8 @@ else
 fi
 
 GHOST_CONFIG_FILE="${GHOST_ROOT_DIR}/config.production.json"
+# if we're restoring we don't want to set GHOST_CONTENT_DIR yet. MAX_DAYS_TO_RETAIN can't be used at the same time as RESTORE, so use that as the if check.
+# example case: config file is deleted (fresh restore) or corrupted. 'GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)' causes an error
 if [ "$MAX_DAYS_TO_RETAIN" ]; then
 
     GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)

@@ -201,7 +201,9 @@ function createContentArchive() {
 
 function createConfigArchive() {
 	# copy the config Config file
-    gzip -c $GHOST_CONFIG_FILE > $CONFIG_ARCHIVE_FILE
+    	#gzip -c $GHOST_CONFIG_FILE > $CONFIG_ARCHIVE_FILE
+	# change to tar so when we untar we can use --same-owner to retain file permissions (if restoring and config file doesn't already exist)
+	tar -cf $CONFIG_ARCHIVE_FILE $GHOST_CONFIG_FILE
 }
 
 # removes all directories older than max retention days - for local backups this is run *after* a backup has been created sucessfully
@@ -597,8 +599,9 @@ function restoreConfigArchive() {
             return 1
         fi
     fi
-    log "unzippling $CONFIG_ARCHIVE_FILE to $GHOST_CONFIG_FILE"
-    gunzip -f -c $CONFIG_ARCHIVE_FILE > $GHOST_CONFIG_FILE
+    log "extracting $CONFIG_ARCHIVE_FILE to $GHOST_CONFIG_FILE"
+    #gunzip -f -c $CONFIG_ARCHIVE_FILE > $GHOST_CONFIG_FILE
+    tar xf $CONFIG_ARCHIVE_FILE --directory $GHOST_ROOT_DIR --same-owner
 }
 
 function restoreContentArchive() {

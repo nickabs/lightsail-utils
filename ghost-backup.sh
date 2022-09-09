@@ -663,12 +663,14 @@ else
 fi
 
 GHOST_CONFIG_FILE="${GHOST_ROOT_DIR}/config.production.json"
-GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)
-GHOST_CONTENT_DIR=${GHOST_CONTENT_DIR%/} # in case there is a trailing / then remove it
-if [[ $GHOST_CONTENT_DIR =~ ^[^/] ]];then # add root directory if content dir is relative
-    GHOST_CONTENT_DIR=${GHOST_ROOT_DIR}/$GHOST_CONTENT_DIR
-fi
+if [ "$MAX_DAYS_TO_RETAIN" ]; then
 
+    GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)
+    GHOST_CONTENT_DIR=${GHOST_CONTENT_DIR%/} # in case there is a trailing / then remove it
+    if [[ $GHOST_CONTENT_DIR =~ ^[^/] ]];then # add root directory if content dir is relative
+        GHOST_CONTENT_DIR=${GHOST_ROOT_DIR}/$GHOST_CONTENT_DIR
+    fi
+fi
 
 BACKUP_DIR=${BACKUP_ROOT_DIR}/${DATE}
 DATABASE_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-database.sql.gz 

@@ -560,7 +560,7 @@ function restoreDatabaseArchive() {
     fi
 
     log "unzipping $DATABASE_ARCHIVE_FILE"
-    if ! gunzip -f $DATABASE_ARCHIVE_FILE ; then
+    if ! gunzip -f -c $DATABASE_ARCHIVE_FILE > ${DATABASE_ARCHIVE_FILE%.gz}; then
         log "can't unzip $DATABASE_ARCHIVE_FILE"
         return 1
     fi
@@ -579,6 +579,8 @@ function restoreDatabaseArchive() {
     fi
     log "running $f on host: $host user: $user database: $database"
     mysql -h $host -u $user $database <  $f
+
+    rm ${DATABASE_ARCHIVE_FILE%.gz}
 }
 
 function restoreConfigArchive() {

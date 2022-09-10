@@ -25,7 +25,7 @@ utility scripts for [ghost](https://ghost.org/) websites deployed on a linux [AW
 ***
 # ghost-backup.sh
 
-The script creates 3 gzip archives and places them in a subdirectory named YYYY-YY-DD, e.g
+The script creates 3 gzip archives and places them in a subdirectory named YYYY-MM-DD, e.g
 ```
 2021-02-19/2021-02-19-database.sql.gz # mysql database dump
 2021-02-19/2021-02-19-content.tar.gz # content (themses, images etc)
@@ -51,7 +51,7 @@ ghost-backup.sh -w /var/www/ghost -l wp.log -b /data/backups/ghost -m 7 -r -g 1v
 ## EXAMPLE - restore Ghost
 restore the config, database and content archives from /data/backups/ghost/2021-02-01
 ```
-ghost-backup.s -w /var/www/ghost -l wp.log -b /data/backups/ghost -R 2021-02-01 -o all
+ghost-backup.sh -w /var/www/ghost -l wp.log -b /data/backups/ghost -R 2021-02-01 -o all
 
 ```
 when using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified google drive first

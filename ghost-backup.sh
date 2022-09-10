@@ -599,6 +599,8 @@ function restoreConfigArchive() {
     fi
     log "unzippling $CONFIG_ARCHIVE_FILE to $GHOST_CONFIG_FILE"
     gunzip -f -c $CONFIG_ARCHIVE_FILE > $GHOST_CONFIG_FILE
+    GHOST_USER=$(stat -c '%U' ${GHOST_ROOT_DIR})
+    chown $GHOST_USER:$GHOST_USER $GHOST_CONFIG_FILE
 }
 
 function restoreContentArchive() {

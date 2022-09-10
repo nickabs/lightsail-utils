@@ -179,10 +179,10 @@ function createDatabaseArchive() {
         return 1
     fi
 
-    if [ "$local_client" != "mysql" ];then
-        log "database.client is $local_client.  This script only supports mysql"
-        return 1
-    fi
+    #if [ "$local_client" != "mysql" ];then
+    #    log "database.client is $local_client.  This script only supports mysql"
+    #    return 1
+    #fi
 
     local database=$(jq -r '.database.connection.database' $GHOST_CONFIG_FILE)
     local user=$(jq -r '.database.connection.user' $GHOST_CONFIG_FILE)

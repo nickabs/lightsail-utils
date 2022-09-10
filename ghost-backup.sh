@@ -201,8 +201,7 @@ function createContentArchive() {
 
 function createConfigArchive() {
 	# copy the config Config file
-    gzip -k $GHOST_CONFIG_FILE 
-    mv $GHOST_CONFIG_FILE.gz $CONFIG_ARCHIVE_FILE
+    gzip -c $GHOST_CONFIG_FILE > $CONFIG_ARCHIVE_FILE
 }
 
 # removes all directories older than max retention days - for local backups this is run *after* a backup has been created sucessfully

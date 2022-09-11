@@ -55,9 +55,11 @@ function checkOptions() {
 		return 1
 	fi
 
-    if [ "$RESTORE" ] && [ "$MAX_DAYS_TO_RETAIN" ]; then
-        echo -e "ERROR: you can't use the -m and -R options at the same time"
-        return 1
+    if [ "$RESTORE" ] || [ "$DOWNLOAD" ]; then
+        if [ "$MAX_DAYS_TO_RETAIN" ]; then
+            echo -e "ERROR: you can't use the -m option with the -R and -d options"
+            return 1
+        fi
     fi
 
     if [ "$GHOST_ROOT_DIR" == "$BACKUP_ROOT_DIR" ]; then
@@ -196,12 +198,13 @@ function createDatabaseArchive() {
 
 function createContentArchive() {
 	# backup the content directory with archive paths relative to the content dir
-	tar --exclude "*.log" -cf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR .
+	tar --exclude "*.log" -czf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR .
 }
 
 function createConfigArchive() {
 	# copy the config Config file
-    gzip -c $GHOST_CONFIG_FILE > $CONFIG_ARCHIVE_FILE
+	# use tar to create the archive so it can be restored with the same owner
+    tar -czf $CONFIG_ARCHIVE_FILE --directory $GHOST_ROOT_DIR ${GHOST_CONFIG_FILE##*/}
 }
 
 # removes all directories older than max retention days - for local backups this is run *after* a backup has been created sucessfully
@@ -597,18 +600,28 @@ function restoreConfigArchive() {
             return 1
         fi
     fi
-    log "unzippling $CONFIG_ARCHIVE_FILE to $GHOST_CONFIG_FILE"
-    gunzip -f -c $CONFIG_ARCHIVE_FILE > $GHOST_CONFIG_FILE
+    log "extracting $CONFIG_ARCHIVE_FILE to $GHOST_CONFIG_FILE"
+    tar -xf $CONFIG_ARCHIVE_FILE --directory $GHOST_ROOT_DIR --same-owner
 }
 
 function restoreContentArchive() {
     log "extracting $CONTENT_ARCHIVE_FILE to $GHOST_CONTENT_DIR"
 
-    tar xzf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR --same-owner
+    if [ ! -d "$GHOST_CONTENT_DIR" ] ; then
+        
+        if ! mkdir $GHOST_CONTENT_DIR ; then
+            errorLog "content directory missing, failed to create new directory: $GHOST_CONTENT_DIR"
+        else
+            log "content directory missing, created new directory: $GHOST_CONTENT_DIR"
+        fi
+        
+    fi
+    tar xf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR --same-owner
 }
 
+#
 # main
-
+#
 export SCRIPT=$(basename $0)
 while getopts "rsw:l:b:t:f:p:m:g:c:a:R:o:d:" o; do
         case "$o" in
@@ -650,7 +663,9 @@ else
     exit -1
 fi
 
-#env 
+#
+# set env vars
+#
 export AT # google auth token
 export WARNING_FLAG # when true send warning email about non critical errors
 export SILENT
@@ -662,30 +677,13 @@ else
     DATE=$(date '+%Y-%m-%d') 
 fi
 
-GHOST_CONFIG_FILE="${GHOST_ROOT_DIR}/config.production.json"
-
-if [ ! -r $GHOST_CONFIG_FILE ]; then
-    errorExit "Can't read ghost config file: $GHOST_CONFIG_FILE"
-fi
-
 BACKUP_DIR=${BACKUP_ROOT_DIR}/${DATE}
 DATABASE_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-database.sql.gz 
 CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz 
-CONFIG_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-json.gz 
-GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)
-GHOST_CONTENT_DIR=${GHOST_CONTENT_DIR%/} # in case there is a trailing / then remove it
-if [[ $GHOST_CONTENT_DIR =~ ^[^/] ]];then # add root directory if content dir is relative
-    GHOST_CONTENT_DIR=${GHOST_ROOT_DIR}/$GHOST_CONTENT_DIR
-fi
-if [ ! -d "$GHOST_CONTENT_DIR" ]; then
-    errorExit "Can't find ghost content directory: $GHOST_CONTENT_DIR"
-fi
+CONFIG_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-json.tar.gz 
+GHOST_CONFIG_FILE="${GHOST_ROOT_DIR}/config.production.json"
 
-
-
-echo "============================================" >>$LOG_FILE
-log $(printf "%s %s starting $SCRIPT")
-
+# get credentials for remote storage
 if [ "$REMOTE" ]; then
 	if [ ! -r "$SERVICE_ACCOUNT_CREDENTIALS_FILE" ] ; then
 		errorExit "can't open credentials file: $SERVICE_ACCOUNT_CREDENTIALS_FILE"
@@ -700,11 +698,12 @@ if [ "$REMOTE" ]; then
 	fi
 fi
 
-if [ ! -w $BACKUP_ROOT_DIR ]; then # both restore and backup options need to be able to write to this directory
-    errorExit "Can't write to backup directory: $BACKUP_ROOT_DIR"
-fi
+echo "============================================" >>$LOG_FILE
+log $(printf "%s %s starting $SCRIPT")
 
+#
 # download backup archives and then exit (if download option has been specified)
+#
 if [ "$DOWNLOAD" ] ; then
     log "downloading remote archive files"
     if  ! downloadRemoteArchiveFiles ; then
@@ -714,23 +713,14 @@ if [ "$DOWNLOAD" ] ; then
     exit
 fi
 
-# restore ghost from backup
-if [ "$RESTORE" ];then
+#
+# if the ghost config file is being restored from an archive, restore it before setting the ghost config vars
+#
+if [ "$RESTORE" ]; then
     if [ "$REMOTE" ]; then 
         log "downloading remote archive files"
         if  ! downloadRemoteArchiveFiles ; then
             errorExit "Could not download remote archive files"
-        fi
-    fi
-
-    log "Restoring ghost archive: $ARCHIVE_DATE"
-
-    if [[ "$ARCHIVE_OPTION" =~ all|database ]] ; then
-    log "Restoring ghost archive: $ARCHIVE_DATE"
-        if ! restoreDatabaseArchive ; then
-            errorExit "could not restore database archive" 
-        else
-            log "database archive restored"
         fi
     fi
 
@@ -739,6 +729,43 @@ if [ "$RESTORE" ];then
             errorExit "could not restore config archive" 
         else
             log "config archive restored"
+        fi
+    fi
+fi
+
+#
+# set ghost config variables
+#
+if [ ! -r $GHOST_CONFIG_FILE ]; then
+    errorExit "Can't read ghost config file: $GHOST_CONFIG_FILE"
+fi
+
+GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)
+GHOST_CONTENT_DIR=${GHOST_CONTENT_DIR%/} # in case there is a trailing / then remove it
+if [[ $GHOST_CONTENT_DIR =~ ^[^/] ]];then # add root directory if content dir is relative
+    GHOST_CONTENT_DIR=${GHOST_ROOT_DIR}/$GHOST_CONTENT_DIR
+fi
+
+if [ ! -d "$GHOST_CONTENT_DIR" ] && [ -z "$RESTORE" ]; then
+    errorExit "Can't find ghost content directory: $GHOST_CONTENT_DIR"
+fi
+
+
+if [ ! -w $BACKUP_ROOT_DIR ]; then # both restore and backup options need to be able to write to this directory
+    errorExit "Can't write to backup directory: $BACKUP_ROOT_DIR"
+fi
+
+#
+# if restoring, restore ghost from archive and then exit
+#
+if [ "$RESTORE" ];then
+    log "Restoring ghost archive: $ARCHIVE_DATE"
+
+    if [[ "$ARCHIVE_OPTION" =~ all|database ]] ; then
+        if ! restoreDatabaseArchive ; then
+            errorExit "could not restore database archive" 
+        else
+            log "database archive restored"
         fi
     fi
 
@@ -754,7 +781,9 @@ if [ "$RESTORE" ];then
     exit
 fi
 
-# create backup
+#
+# create backup archives
+#
 if [ ! -d $BACKUP_DIR ]; then
     if ! mkdir $BACKUP_DIR ; then
         errorExit "can't create backup directory: $BACKUP_DIR"

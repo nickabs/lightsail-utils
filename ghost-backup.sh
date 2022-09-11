@@ -563,7 +563,7 @@ function restoreDatabaseArchive() {
     fi
 
     log "unzipping $DATABASE_ARCHIVE_FILE"
-    if ! gunzip -f $DATABASE_ARCHIVE_FILE ; then
+    if ! gunzip -k $DATABASE_ARCHIVE_FILE ; then
         log "can't unzip $DATABASE_ARCHIVE_FILE"
         return 1
     fi

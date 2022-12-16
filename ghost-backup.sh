@@ -7,27 +7,30 @@ set -o errtrace
 trap "errorExit process terminated" SIGTERM SIGINT SIGQUIT SIGKILL ERR
 
 function usage() {
-    echo "Usage: $SCRIPT  -l log file -w ghost dir -b backup dir
-        [ -m days (max daily backups to retain) ]
+    echo "Usage: $SCRIPT -m archive|restore|retrieve -l log file -a archive directory -o all|config|content|database
+        [ -g ghost dir ] (archive|restore mode: ghost installation directory containing ghost config file)
+        [ -k keep days ] (archive mode: maximum number of daily archives to keep)
+        [ -r -G google drive id -C credential config file for google service account] (remote storage options)
+        [ -d YYYY-MM-DD ] (retrive|restore date)
         [ -s (silent) ]
         [ -p passphrase ] (when specified this will be used as a key to encrypt the database and config archives )  
-        [ -f email from -t email to -a aws profile name ]
-		[ -r remote storage -g google drive id -c credential config file for service account]
-        [ -R YYYY-MM-DD (restore from backup directory) -o all|config|content|database (specifies which archives to restore) ]
-        [ -d YYYY-MM-DD -o all|config|content|database (used with the -r option, download the remote backup archives without restoring ) ] 
+        [ -f email from -t email to -A aws profile name ] (send email using Amazon SES on completion)
 
         EXAMPLE
-        1. backup ghost files and copy to remote storage (note when specifying remote storage the backups are managed in the specified google drive and the local copy is deleted)
 
-        $SCRIPT -w /var/www/ghost -l ghost.log -b /data/backups/ghost -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f lightsail-snapshot@example.com -t example@mail.com -a LightsailSnapshotAdmin
+        1. archive ghost files and copy the archive to remote storage (when specifying remote storage the archives are managed in the specified google drive and the local archive files are deleted)
 
-        2. to restore the backup from 1st February 2021 
-        $SCRIPT -w /var/www/ghost -l ghost.log -b /data/backups/ghost -R 2021-02-01 -o all
+        $SCRIPT -m archive -l ghost.log -a /data/archives/ghost -g /var/www/ghost -k 7 -o all -r remote -G 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -C project123-f712345a860a.json
 
-        when using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified google drive
+        2. archive ghost files to the local directory specified with -a and send an email after the script completes
 
-        3. get the remote backup archives from 1st February 2021 but do not restore them
-        $SCRIPT -w /var/www/ghost -l ghost.log -b /data/backups/ghost -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -d 2021-02-01 -o all
+        $SCRIPT -m archive -l ghost.log -a /data/archives/ghost -g /var/www/ghost -k7 -o all -r local -f lightsail-snapshot@example.com -t example@mail.com -A LightsailSnapshotAdmin
+
+        3. restore the config, content and database archives from 1st February 2022 
+        $SCRIPT -m restore -l ghost.log -g /var/www/ghost -l -a /data/archives/ghost -d 2022-02-01 -o all
+
+        4. retrieve the remote archive archives from 1st February 2022 but do not restore them (the archives are retrieved to the directory specified with -a)
+        $SCRIPT -m retrieve -l ghost.log -a /data/archives/ghost -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -d 2022-02-01 -o all
 
         see https://github.com/nickabs/lightsail-utils for more information
         " 1>&2
@@ -35,45 +38,48 @@ function usage() {
 }
 
 function checkOptions() {
+
+
+    if ! [[ "$MODE" =~ ^archive$|^restore$|^retrieve$ ]]; then
+        echo -e "ERROR: you must specify either archive, restore or retrieve with the mode (-m) option"
+        return 1
+    fi
+
 	if [ ! "$LOG_FILE" ]; then
         echo -e "ERROR: you must specify a log file\n" >&2
 		return 1
 	fi
+    
+    if ! [[ "$ARCHIVE_OPTION" =~ ^all$|^config$|^database$|^content$ ]];then
+        echo -e "ERROR: you must specify one of these options with the -o flag : all, config, database or content\n" >&2
+        return 1
+    fi
 
-    if [ ! "$GHOST_ROOT_DIR" ]; then
-        echo -e "ERROR: you must specify the ghost root directory\n" >&2
-		return 1
-	fi
-
-    if [ ! "$BACKUP_ROOT_DIR" ]; then
-        echo -e "ERROR: you must specify a backup dir\n" >&2
-		return 1
-	fi
-
-    if [ ! "$MAX_DAYS_TO_RETAIN" ] && [ ! "$ARCHIVE_DATE" ]; then
-        echo -e "ERROR: you must specify the number of retention days when creating a new backup\n" >&2
-		return 1
-	fi
-
-    if [ "$RESTORE" ] || [ "$DOWNLOAD" ]; then
-        if [ "$MAX_DAYS_TO_RETAIN" ]; then
-            echo -e "ERROR: you can't use the -m option with the -R and -d options"
+    if [  "$MODE" != "retrieve" ]; then
+        if [ ! "$GHOST_ROOT_DIR" ]; then
+            echo -e "ERROR: you must specify the ghost root directory when backing up or restoring\n" >&2
             return 1
         fi
+
     fi
 
-    if [ "$GHOST_ROOT_DIR" == "$BACKUP_ROOT_DIR" ]; then
-        echo -e "ERROR: can't create backup files in the ghost root directory\n" >&2 
+    if [ ! "$ARCHIVE_ROOT_DIR" ]; then
+        echo -e "ERROR: you must specify a local directory for the archive files\n" >&2
+		return 1
+	fi
+
+    if [ "$MODE" != "archive" ] && [ "$MAX_DAYS_TO_KEEP" ]; then
+            echo -e "ERROR: you can only use the -k option when in archive mode\n"
+            return 1
+    fi
+
+    if [ "$GHOST_ROOT_DIR" == "$ARCHIVE_ROOT_DIR" ]; then
+        echo -e "ERROR: can't create archive files in the ghost root directory\n" >&2 
         return 1
     fi
 
-    if [ "$DOWNLOAD" ] && [ "$RESTORE" ]; then
-        echo -e "ERROR: you can't use the -d (download) option with the -R (restore) option  \n" >&2 
-        return 1
-    fi
-
-    if [ "$DOWNLOAD" ] && [ -z "$REMOTE" ]; then
-        echo -e "ERROR: you can only use the download option with the -r (remote) flag \n" >&2 
+    if [ "$MODE" == "retrieve" ] && [ ! "$REMOTE" ];then
+        echo -e "ERROR: retrieve mode can only be used with the -r (remote) parameters \n"
         return 1
     fi
 
@@ -84,23 +90,16 @@ function checkOptions() {
         fi
     fi
 
-    if [ "$RESTORE" ]|| [ "$DOWNLOAD" ] ; then
+    if [[ "$MODE" =~ "restore|retreive" ]]; then
         if [[ ! "$ARCHIVE_DATE" =~ [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]];then
-            echo -e "ERROR: restore directory should be specified as YYYY-MM-DD\n" ; >&2
-            return 1
-        fi
-    fi
-
-    if [ "$RESTORE" ] || [ "$DOWNLOAD" ]; then 
-        if [[ ! "$ARCHIVE_OPTION" =~ ^all$|^config$|^database$|^content$ ]];then
-            echo -e "ERROR: you must specify one of these options with the -o flag : all, config, database or content\n" >&2
+            echo -e "ERROR: the $MODE directory should be specified as YYYY-MM-DD\n" ; >&2
             return 1
         fi
     fi
 
 
 	if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
-        if [ "$RESTORE" ];then
+        if [ ! "$MODE" == "restore" ];then
 			echo -e "ERROR: email notifications not available when restoring data\n" >&2
 			return 1
 		fi
@@ -116,6 +115,10 @@ function checkOptions() {
 		EMAIL=true
 	fi
 
+    if [ "$PASSPHRASE" ] && [ "$MODE" == "content" ];then
+        echo -e "ERROR: only the config and database files can be encrypted"
+        exit 1
+    fi
 }
 
 function isRoot() {
@@ -140,9 +143,9 @@ function errorExit() {
 			echo "$SCRIPT: ERROR: could not send email" 2>&1
        	fi
     fi
-	if [ "$REMOTE" ] && [ -d $BACKUP_DIR ]; then
-		log "removing working dir $BACKUP_DIR following error"
-		rm -rf $BACKUP_DIR
+	if [ "$REMOTE" ] && [ -d $ARCHIVE_DIR ]; then
+		log "removing working dir $ARCHIVE_DIR following error"
+	# debug	rm -rf $ARCHIVE_DIR
 	fi
 	exit $exit_status
 }
@@ -197,7 +200,7 @@ function createDatabaseArchive() {
 }
 
 function createContentArchive() {
-	# backup the content directory with archive paths relative to the content dir
+	# archive the content directory with archive paths relative to the content dir
 	tar --exclude "*.log" -czf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR .
 }
 
@@ -207,12 +210,12 @@ function createConfigArchive() {
     tar -czf $CONFIG_ARCHIVE_FILE --directory $GHOST_ROOT_DIR ${GHOST_CONFIG_FILE##*/}
 }
 
-# removes all directories older than max retention days - for local backups this is run *after* a backup has been created sucessfully
-function deleteOldestDailyBackupsLocal() {
-	local backup_date
-	for d in ${BACKUP_ROOT_DIR}/????-??-??/ ; do
-		backup_date=$(basename $d)
-	   	if [ $( daysBetween $DATE $backup_date ) -ge $MAX_DAYS_TO_RETAIN ] ;then  
+# removes all directories older than max retention days - for local archives this is run *after* a archive has been created sucessfully
+function deleteOldestDailyarchivesLocal() {
+	local archive_date
+	for d in ${ARCHIVE_ROOT_DIR}/????-??-??/ ; do
+		archive_date=$(basename $d)
+	   	if [ $( daysBetween $DATE $archive_date ) -ge $MAX_DAYS_TO_KEEP ] ;then  
 			log "removing $d"
 			if ! rm -rf $d ; then
 				errorExit "error could not remove $d"
@@ -222,44 +225,44 @@ function deleteOldestDailyBackupsLocal() {
 }
 
 
-# to maximise the use of space in the remote storage location the script will remove old backups before the new one is copied
-function deleteOldestDailyBackupsRemote() {
-	local folders folder backup_date backup_id backup_count estimated_backup_size available_space estimated_space_required backups_pending deleted_count
+# to maximise the use of space in the remote storage location the script will remove old archives before the new one is copied
+function deleteOldestDailyarchivesRemote() {
+	local folders folder archive_date archive_id archive_count estimated_archive_size available_space estimated_space_required archives_pending deleted_count
     
 	# find folders named YYYY-MM-DD
 	readarray -t folders < <(gdriveListFiles $REMOTE_ROOT_DIR_ID "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]" application/vnd.google-apps.folder)
 	if [ -z "$folders" ]; then
-		log "no backup folders found in remote root dir"
+		log "no archive folders found in remote root dir"
 		return
 	fi
 
-    backup_count=0
+    archive_count=0
     deleted_count=0
 
 	for folder in "${folders[@]}"
 	do
-		backup_date=$( echo $folder | gawk '{ print $3 }')
-		backup_id=$( echo $folder | gawk '{ print $1 }')
-	   	if [ $( daysBetween $DATE $backup_date ) -ge $MAX_DAYS_TO_RETAIN ] ;then  
-			if gdriveDeleteFile $backup_id ; then
-				log "removing remote folder: \"$backup_date\" id=\"$backup_id\""
+		archive_date=$( echo $folder | gawk '{ print $3 }')
+		archive_id=$( echo $folder | gawk '{ print $1 }')
+	   	if [ $( daysBetween $DATE $archive_date ) -ge $MAX_DAYS_TO_KEEP ] ;then  
+			if gdriveDeleteFile $archive_id ; then
+				log "removing remote folder: \"$archive_date\" id=\"$archive_id\""
                 deleted_count=$((++deleted_count))
 			else
 				log "WARNING: could not delete folder $i from remote root directory $REMOTE_ROOT_DIR_ID"
 				WARNING_FLAG=true
 			fi
 		fi
-        backup_count=$((++backup_count))
+        archive_count=$((++archive_count))
 	done
 
     sleep 60 # wait 60 seconds since qouta usage is not updated immediately after a deletion
-    # check there is enough space for the next backup
-    estimated_backup_size=$(du -sb $BACKUP_DIR |gawk '{print $1}')
+    # check there is enough space for the next archive
+    estimated_archive_size=$(du -sb $ARCHIVE_DIR |gawk '{print $1}')
     available_space=$(showAvailableStorageQouta)
-    backups_pending=$(( MAX_DAYS_TO_RETAIN - (backup_count - deleted_count) ))
-    estimated_space_required=$(( estimated_backup_size  * backups_pending ))
+    archives_pending=$(( MAX_DAYS_TO_KEEP - (archive_count - deleted_count) ))
+    estimated_space_required=$(( estimated_archive_size  * archives_pending ))
 
-    log "$backup_count backups found, $deleted_count deleted, $backups_pending pending"
+    log "$archive_count archives found, $deleted_count deleted, $archives_pending pending"
 
     log $(checkAvailableStorageQuota  "$estimated_space_required" "$available_space")
 
@@ -286,7 +289,7 @@ function getGoogleAccessToken() {
 	# retrieve access token
 	local response=$(curl --silent --data "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=$jwt_assertion" https://oauth2.googleapis.com/token )
 	local at=$(echo "$response"|jq -r '.access_token')
-	if [ -z "$at" ] || [ "$at" = "null" ];then
+	if [ -z "$at" ] || [ "$at" == "null" ];then
 	 	echo "ouath error: " $(echo  "$response"|jq -r '.error_description' ) >&2
 		return 1
 	else
@@ -490,73 +493,115 @@ function checkAvailableStorageQuota() {
     }' avail=$2
 }
 
+# download files 
 function downloadRemoteArchiveFiles() {
+    local encrypted=""
+    local target_file=""
 
-        if [ ! -d "$BACKUP_DIR" ] && ! mkdir $BACKUP_DIR ;then
-                errorExit "could not create $BACKUP_DIR"
-        fi
-        # get the folder id for the directory containing the archive files
-        local folder_id="$(gdriveListFiles $REMOTE_ROOT_DIR_ID $DATE application/vnd.google-apps.folder  | awk '{print $1}' )"
+    if [ ! -d "$ARCHIVE_DIR" ] && ! mkdir $ARCHIVE_DIR ;then
+        errorExit "could not create $ARCHIVE_DIR"
+    fi
+    
+    # get the folder id for the directory containing the archive files
+    local folder_id="$(gdriveListFiles $REMOTE_ROOT_DIR_ID $DATE application/vnd.google-apps.folder  | awk '{print $1}' )"
 
-        if [ -z "$folder_id"  ]; then
-            errorExit "Can't find remote backup directory: $DATE"
-        fi
+    if [ -z "$folder_id"  ]; then
+        errorExit "Can't find remote archive directory: $DATE"
+    fi
 
-        # get a list of the gzipped archives 
-        # The array is indexed by file name and the value is the google fileid
-        declare -A a="( $(gdriveListFiles $folder_id "${DATE}.*.gz.*$" application/gzip | awk '{ printf "[%s]=%s ", $3, $1  }') )"
+    # get a list of the gzipped archives 
+    # The array is indexed by file name and the value is the google fileid
+    declare -A a="( $(gdriveListFiles $folder_id "${DATE}.*.gz.*$" application/gzip | awk '{ printf "[%s]=%s ", $3, $1  }') )"
+    
+    # if the returned filenames have  *.gpg suffixes then they are encrypted
+    if [[ "${!a[@]}" =~ $ENCRYPTED_FILE_SUFFIX ]]; then
+        encrypted=true
+    fi
 
-        # if the returned filenames have  *.gz.gpg suffixes then the 
-        # config and database files are encrypted
-        if [[ "${!a[@]}" =~ ".gz.gpg" ]];then
-            log "encrypted files found"
-            local suffix=".gpg"
-        fi
+    if [[ "$ARCHIVE_OPTION" =~ all|database ]];then
 
-        if [[ "$ARCHIVE_OPTION" =~ all|database ]];then
-            key=${DATABASE_ARCHIVE_FILE##*/}
-            id=${a[${key}${suffix}]}
-            log "downloading database archive file $id to ${DATABASE_ARCHIVE_FILE}${suffix}"
-            if ! gdriveDownloadFile $id ${DATABASE_ARCHIVE_FILE}${suffix} ; then
-                errorExit "remote download failed"
-            fi  
+        if [ $encrypted ];then
+            # download to a file with the .gpg suffix
+            target_file="${DATABASE_ARCHIVE_FILE}${ENCRYPTED_FILE_SUFFIX}"
+        else
+            target_file="${DATABASE_ARCHIVE_FILE}"
         fi
-        if [[ "$ARCHIVE_OPTION" =~ all|config ]];then
-            key=${CONFIG_ARCHIVE_FILE##*/}
-            id=${a[${key}${suffix}]}
+        key=${target_file##*/} # remove parent dirs
+        id=${a[${key}]}
+        
+        log "downloading database archive file $id to $target_file"
+        if ! gdriveDownloadFile $id $target_file ; then
+            errorExit "remote download failed"
+        fi  
+        # check if the file is encrypted and decrypt if needed
+        decryptArchive "$DATABASE_ARCHIVE_FILE"
+    fi
 
-            log "downloading config archive file $id to ${CONFIG_ARCHIVE_FILE}${suffix}"
-            if ! gdriveDownloadFile $id ${CONFIG_ARCHIVE_FILE}${suffix}; then
-                errorExit "remote download failed"
-            fi  
+    if [[ "$ARCHIVE_OPTION" =~ all|config ]];then
+
+        if [ $encrypted ];then
+            # download to a file with the .gpg suffix
+            target_file="${CONFIG_ARCHIVE_FILE}${ENCRYPTED_FILE_SUFFIX}"
+        else
+            target_file="$CONFIG_ARCHIVE_FILE"
         fi
-        if [[ "$ARCHIVE_OPTION" =~ all|content ]];then
-            key=${CONTENT_ARCHIVE_FILE##*/}
-            id=${a[${key}]}
-            log "downloading content archive file $id to $CONTENT_ARCHIVE_FILE"
-            if ! gdriveDownloadFile $id $CONTENT_ARCHIVE_FILE ; then
-                errorExit "remote download failed"
-            fi  
+        key=${target_file##*/}
+        id=${a[${key}]}
+        
+        log "downloading config archive file $id to $target_file"
+        if ! gdriveDownloadFile $id $target_file ; then
+            errorExit "remote download failed"
+        fi  
+        # check if the file is encrypted and decrypt if needed
+        decryptArchive "$CONFIG_ARCHIVE_FILE"
+    fi
+
+    # the content file is not encrypted
+    if [[ "$ARCHIVE_OPTION" =~ all|content ]];then
+        key=${CONTENT_ARCHIVE_FILE##*/}
+        id=${a[${key}]}
+        log "downloading content archive file $id to $CONTENT_ARCHIVE_FILE"
+        if ! gdriveDownloadFile $id $CONTENT_ARCHIVE_FILE ; then
+            errorExit "remote download failed"
+        fi  
+    fi
+}
+
+function decryptArchive() {
+    local file=$1
+    local encrypted=""
+
+    # check for an encrpted file
+    if [ -f ${file}${ENCRYPTED_FILE_SUFFIX} ] ; then
+        encrypted=true
+    fi
+   
+    if [ ! $encrypted ]; then
+        if [ "$PASSPHRASE" ] ;then
+            log "WARNING: passcode supplied but unecrypted archive found: $file"
         fi
+        return
+    else 
+        if [ -z "$PASSPHRASE" ]; then
+            if [ "$MODE" == "restore" ]; then
+                errorExit "encrypted file $file found but no passcode supplied to decrypt it"
+            else 
+                # when mode is "retrieve", download the file with out decrypting
+                log "WARNING: encrypted file $file found but no passphrase supplied to decrypt it"
+                return
+            fi
+        fi
+    fi
+
+    if ! gpg --decrypt --passphrase $PASSPHRASE --batch ${file}${ENCRYPTED_FILE_SUFFIX} > $file ; then
+        log "could not decrypt file - check your passphrase"
+        return 1
+    else
+        log "file  decrypted: $DATABASE_ARCHIVE_FILE"
+    fi
 }
 
 function restoreDatabaseArchive() {
-    
-    # check for an encrpted file
-    local suffix=".gpg"
-
-    if [ -f ${DATABASE_ARCHIVE_FILE}${suffix} ];then
-        log "encrypted database archive found"
-        if [ -z "$PASSPHRASE" ];then
-            log "you must specify a passphrase to decrypt the database archive"
-            return 1
-        fi
-
-        if ! gpg --decrypt --passphrase $PASSPHRASE --batch ${DATABASE_ARCHIVE_FILE}${suffix} > $DATABASE_ARCHIVE_FILE ; then
-            log "could not decrypt file - check your passphrase"
-            return 1
-        fi
-    fi
     if [ ! -f $DATABASE_ARCHIVE_FILE ]; then
         log "can't find $DATABASE_ARCHIVE_FILE"
         return 1
@@ -585,23 +630,8 @@ function restoreDatabaseArchive() {
 }
 
 function restoreConfigArchive() {
-    # check for an encrpted file
-    local suffix=".gpg"
-
-    if [ -f ${CONFIG_ARCHIVE_FILE}${suffix} ];then
-        log "encrypted config archive found"
-        if [ -z "$PASSPHRASE" ];then
-            log "you must specify a passphrase to decrypt the config archive"
-            return 1
-        fi
-
-        if ! gpg --decrypt --passphrase $PASSPHRASE --batch ${CONFIG_ARCHIVE_FILE}${suffix} > $CONFIG_ARCHIVE_FILE ; then
-            log "could not decrypt file - check your passphrase"
-            return 1
-        fi
-    fi
     log "extracting $CONFIG_ARCHIVE_FILE to $GHOST_CONFIG_FILE"
-    tar -xf $CONFIG_ARCHIVE_FILE --directory $GHOST_ROOT_DIR --same-owner
+    tar -xf $CONFIG_ARCHIVE_FILE --directory $GHOST_ROOT_DIR --same-owner 
 }
 
 function restoreContentArchive() {
@@ -623,23 +653,23 @@ function restoreContentArchive() {
 # main
 #
 export SCRIPT=$(basename $0)
-while getopts "rsw:l:b:t:f:p:m:g:c:a:R:o:d:" o; do
+while getopts "rsm:l:k:a:g:G:C:f:t:A:p:d:o:" o; do
         case "$o" in
-        s) export SILENT=true ;; # disable screen output
+        m) export MODE=$OPTARG ;; 
         l) export LOG_FILE=$OPTARG ;; 
-        m) export MAX_DAYS_TO_RETAIN=$OPTARG ;; 
-        b) export BACKUP_ROOT_DIR=${OPTARG%/} ;; 
+        a) export ARCHIVE_ROOT_DIR=${OPTARG%/} ;; 
+        g) export GHOST_ROOT_DIR=${OPTARG%/} ;;
+        k) export MAX_DAYS_TO_KEEP=$OPTARG ;; 
+        r) export REMOTE=true ;;
+        G) export REMOTE_ROOT_DIR_ID=$OPTARG;; # google drive folder id
+        C) export SERVICE_ACCOUNT_CREDENTIALS_FILE=$OPTARG;; # service account credentials file from https://console.developers.google.com/
         f) export FROM_EMAIL=$OPTARG ;;
         t) export TO_EMAIL=$OPTARG ;;
-        a) export AWS_PROFILE=$OPTARG ;;
-        w) export GHOST_ROOT_DIR=${OPTARG%/} ;;
+        A) export AWS_PROFILE=$OPTARG ;;
         p) export PASSPHRASE=$OPTARG ;;
-        g) export REMOTE_ROOT_DIR_ID=$OPTARG;; # google drive folder id
-        c) export SERVICE_ACCOUNT_CREDENTIALS_FILE=$OPTARG;; # service account credentials file from https://console.developers.google.com/
-        r) export REMOTE=true ;;
-        R) export RESTORE=true;ARCHIVE_DATE=$OPTARG ;;
+        s) export SILENT=true ;; # disable screen output
         o) export ARCHIVE_OPTION=$OPTARG ;;
-        d) export DOWNLOAD=true;ARCHIVE_DATE=$OPTARG ;;
+        d) export ARCHIVE_DATE=$OPTARG ;;
         *) usage ;;
         esac
 done
@@ -669,18 +699,19 @@ fi
 export AT # google auth token
 export WARNING_FLAG # when true send warning email about non critical errors
 export SILENT
+export ENCRYPTED_FILE_SUFFIX=".gpg"
 
-# working directory for backup files - when restoring use the date specified on the command line
+# working directory for archive files - when restoring use the date specified on the command line
 if [ "$ARCHIVE_DATE" ];then
     DATE=$ARCHIVE_DATE
 else
     DATE=$(date '+%Y-%m-%d') 
 fi
 
-BACKUP_DIR=${BACKUP_ROOT_DIR}/${DATE}
-DATABASE_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-database.sql.gz 
-CONTENT_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-content.tar.gz 
-CONFIG_ARCHIVE_FILE=$BACKUP_DIR/${DATE}-json.tar.gz 
+ARCHIVE_DIR=${ARCHIVE_ROOT_DIR}/${DATE}
+DATABASE_ARCHIVE_FILE=$ARCHIVE_DIR/${DATE}-database.sql.gz 
+CONTENT_ARCHIVE_FILE=$ARCHIVE_DIR/${DATE}-content.tar.gz 
+CONFIG_ARCHIVE_FILE=$ARCHIVE_DIR/${DATE}-json.tar.gz 
 GHOST_CONFIG_FILE="${GHOST_ROOT_DIR}/config.production.json"
 
 # get credentials for remote storage
@@ -702,13 +733,14 @@ echo "============================================" >>$LOG_FILE
 log $(printf "%s %s starting $SCRIPT")
 
 #
-# download backup archives and then exit (if download option has been specified)
+# retrieve archive archives and then exit 
 #
-if [ "$DOWNLOAD" ] ; then
+if [ "$MODE" == "retrieve" ] ; then
     log "downloading remote archive files"
     if  ! downloadRemoteArchiveFiles ; then
         errorExit "Could not download remote archive files"
     fi
+
     log "download complete"
     exit
 fi
@@ -716,7 +748,7 @@ fi
 #
 # if the ghost config file is being restored from an archive, restore it before setting the ghost config vars
 #
-if [ "$RESTORE" ]; then
+if [ "$MODE" == "restore" ] ; then
     if [ "$REMOTE" ]; then 
         log "downloading remote archive files"
         if  ! downloadRemoteArchiveFiles ; then
@@ -725,6 +757,7 @@ if [ "$RESTORE" ]; then
     fi
 
     if [[ "$ARCHIVE_OPTION" =~ all|config ]]; then
+        decryptArchive "$CONFIG_ARCHIVE_FILE"
         if ! restoreConfigArchive ; then
             errorExit "could not restore config archive" 
         else
@@ -746,22 +779,19 @@ if [[ $GHOST_CONTENT_DIR =~ ^[^/] ]];then # add root directory if content dir is
     GHOST_CONTENT_DIR=${GHOST_ROOT_DIR}/$GHOST_CONTENT_DIR
 fi
 
-if [ ! -d "$GHOST_CONTENT_DIR" ] && [ -z "$RESTORE" ]; then
-    errorExit "Can't find ghost content directory: $GHOST_CONTENT_DIR"
-fi
 
-
-if [ ! -w $BACKUP_ROOT_DIR ]; then # both restore and backup options need to be able to write to this directory
-    errorExit "Can't write to backup directory: $BACKUP_ROOT_DIR"
+if [ ! -w $ARCHIVE_ROOT_DIR ]; then # both restore and archive options need to be able to write to this directory
+    errorExit "Can't write to archive directory: $ARCHIVE_ROOT_DIR"
 fi
 
 #
-# if restoring, restore ghost from archive and then exit
+# if restoring, restore from archive and then exit
 #
-if [ "$RESTORE" ];then
+if [ "$MODE" == "restore" ] ; then
     log "Restoring ghost archive: $ARCHIVE_DATE"
 
     if [[ "$ARCHIVE_OPTION" =~ all|database ]] ; then
+        decryptArchive "$DATABASE_ARCHIVE_FILE"
         if ! restoreDatabaseArchive ; then
             errorExit "could not restore database archive" 
         else
@@ -782,52 +812,60 @@ if [ "$RESTORE" ];then
 fi
 
 #
-# create backup archives
+# create archives
 #
-if [ ! -d $BACKUP_DIR ]; then
-    if ! mkdir $BACKUP_DIR ; then
-        errorExit "can't create backup directory: $BACKUP_DIR"
+if [ ! -d $ARCHIVE_DIR ]; then
+    if ! mkdir $ARCHIVE_DIR ; then
+        errorExit "can't create archive directory: $ARCHIVE_DIR"
     fi
 fi
 
 echo "============================================" >>$LOG_FILE
 log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT starting"
 
-log "Creating database archive: $DATABASE_ARCHIVE_FILE"
-if ! createDatabaseArchive ; then
-    errorExit "could not create database archive"
-fi
-
-log "Creating content archive: $CONTENT_ARCHIVE_FILE"
-if ! createContentArchive ; then
-    errorExit "could not create content archive"
-fi
-
-log "Creating config archive: $CONFIG_ARCHIVE_FILE"
-if ! createConfigArchive ; then
-    errorExit "could not create config archive"
-fi
-
-if [ ! -z "$PASSPHRASE" ] ; then
-
-    log "encrypting $CONFIG_ARCHIVE_FILE"
-    gpg --symmetric --passphrase $PASSPHRASE --batch -o ${CONFIG_ARCHIVE_FILE}.gpg  $CONFIG_ARCHIVE_FILE && rm $CONFIG_ARCHIVE_FILE
-    if [ $? -ne 0 ]; then
-        errorExit "could not encrypt $CONFIG_ARCHIVE_FILE"
+if [[ "$ARCHIVE_OPTION" =~ all|database ]];then
+    log "Creating database archive: $DATABASE_ARCHIVE_FILE"
+    if ! createDatabaseArchive ; then
+        errorExit "could not create database archive"
     fi
-
-    log "encrypting $DATABASE_ARCHIVE_FILE"
-    gpg --symmetric --passphrase $PASSPHRASE --batch -o ${DATABASE_ARCHIVE_FILE}.gpg  $DATABASE_ARCHIVE_FILE && rm $DATABASE_ARCHIVE_FILE
-    if [ $? -ne 0 ]; then
-        errorExit "could not encrypt $DATABASE_ARCHIVE_FILE"
+    if [ ! -z "$PASSPHRASE" ] ; then
+        log "encrypting $DATABASE_ARCHIVE_FILE"
+        gpg --symmetric --passphrase $PASSPHRASE --batch -o ${DATABASE_ARCHIVE_FILE}.gpg  $DATABASE_ARCHIVE_FILE && rm $DATABASE_ARCHIVE_FILE
+        if [ $? -ne 0 ]; then
+            errorExit "could not encrypt $DATABASE_ARCHIVE_FILE"
+        fi
     fi
+fi
 
+if [[ "$ARCHIVE_OPTION" =~ all|content ]];then
+
+    log "Creating content archive: $CONTENT_ARCHIVE_FILE"
+    if [ ! -d "$GHOST_CONTENT_DIR" ]; then
+        errorExit "Can't find ghost content directory: $GHOST_CONTENT_DIR"
+    fi
+    if ! createContentArchive ; then
+        errorExit "could not create content archive"
+    fi
+fi
+
+if [[ "$ARCHIVE_OPTION" =~ all|config ]];then
+    log "Creating config archive: $CONFIG_ARCHIVE_FILE"
+    if ! createConfigArchive ; then
+        errorExit "could not create config archive"
+    fi
+    if [ ! -z "$PASSPHRASE" ] ; then
+        log "encrypting $CONFIG_ARCHIVE_FILE"
+        gpg --symmetric --passphrase $PASSPHRASE --batch -o ${CONFIG_ARCHIVE_FILE}.gpg  $CONFIG_ARCHIVE_FILE && rm $CONFIG_ARCHIVE_FILE
+        if [ $? -ne 0 ]; then
+            errorExit "could not encrypt $CONFIG_ARCHIVE_FILE"
+        fi
+    fi
 fi
 
 # remove old local files and exit 
 if [ ! "$REMOTE" ];then
-	log "removing local daily backups older than $MAX_DAYS_TO_RETAIN days old"
-	deleteOldestDailyBackupsLocal
+	log "removing local daily archives older than $MAX_DAYS_TO_KEEP days old"
+	deleteOldestDailyarchivesLocal
 	completionMessages 
 
     exit # end of local back up process
@@ -843,40 +881,40 @@ else
     errorExit "could not access the Google Drive API: $q"
 fi
 
-# attempt to remove any remote backup dir(s) with today's date in case of reruns
+# attempt to remove any remote archive dir(s) with today's date in case of reruns
 ids="$(gdriveListFiles $REMOTE_ROOT_DIR_ID $DATE application/vnd.google-apps.folder  | awk '{print $1}' 2>/dev/null)"
 if [ ! -z "$ids" ];then
     for i in ${ids[@]}; do
         if gdriveDeleteFile $i ; then
             log "existing \"$DATE\" folder  id=\"$i\" deleted"
         else
-            log "WARNING: could not delete folder $i from backup root directory $REMOTE_ROOT_DIR_ID"
+            log "WARNING: could not delete folder $i from archive root directory $REMOTE_ROOT_DIR_ID"
             WARNING_FLAG=true
         fi
         done 
 fi
 
-log "removing remote daily backups older than $MAX_DAYS_TO_RETAIN days old"
-deleteOldestDailyBackupsRemote
+log "removing remote daily archives older than $MAX_DAYS_TO_KEEP days old"
+deleteOldestDailyarchivesRemote
 
-# create a directory for today's backup files (YYYY-DD-MM)
+# create a directory for today's archive files (YYYY-DD-MM)
 if REMOTE_DIR_ID=$(gdriveCreateFolder "$REMOTE_ROOT_DIR_ID" "$DATE"); then
-	log "backup dir created, name=\"$DATE\", id=\"$REMOTE_DIR_ID\""
+	log "archive dir created, name=\"$DATE\", id=\"$REMOTE_DIR_ID\""
 else	
-	errorExit "could not create backup dir $TODAY"
+	errorExit "could not create archive dir $TODAY"
 fi
 
-# upload the backup files
-readarray -t files < <(find $BACKUP_DIR -name '*.gz' -o -name '*.gpg' )
+# upload the archive files
+readarray -t files < <(find $ARCHIVE_DIR -name '*.gz' -o -name '*.gpg' )
 for i in "${files[@]}"
 do
 	if UPLOAD_FILE_ID=$(gdriveUploadFile $i $REMOTE_DIR_ID application/gzip); then
 		log "$i uploaded, id=\"$UPLOAD_FILE_ID\""
 	else
-		errorExit "could not upload file $i to backup dir, id=\"$REMOTE_DIR_ID\""
+		errorExit "could not upload file $i to archive dir, id=\"$REMOTE_DIR_ID\""
 	fi
 done
 
-log "removing local backup files from $BACKUP_DIR"
-rm -rf $BACKUP_DIR
+log "removing local archive files from $ARCHIVE_DIR"
+rm -rf $ARCHIVE_DIR
 completionMessages

@@ -39,7 +39,6 @@ function usage() {
 
 function checkOptions() {
 
-
     if ! [[ "$MODE" =~ ^archive$|^restore$|^retrieve$ ]]; then
         echo -e "ERROR: you must specify either archive, restore or retrieve with the mode (-m) option"
         return 1
@@ -90,13 +89,12 @@ function checkOptions() {
         fi
     fi
 
-    if [[ "$MODE" =~ "restore|retreive" ]]; then
+    if [[ "$MODE" =~ restore|retrieve ]]; then
         if [[ ! "$ARCHIVE_DATE" =~ [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]];then
-            echo -e "ERROR: the $MODE directory should be specified as YYYY-MM-DD\n" ; >&2
+            echo -e "ERROR: use the -d otion with an archive date formatted as YYYY-MM-DD when in $MODE mode\n" ; >&2
             return 1
         fi
     fi
-
 
 	if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
         if [ ! "$MODE" == "restore" ];then
@@ -143,10 +141,6 @@ function errorExit() {
 			echo "$SCRIPT: ERROR: could not send email" 2>&1
        	fi
     fi
-	if [ "$REMOTE" ] && [ -d $ARCHIVE_DIR ]; then
-		log "removing working dir $ARCHIVE_DIR following error"
-	# debug	rm -rf $ARCHIVE_DIR
-	fi
 	exit $exit_status
 }
 
@@ -241,8 +235,8 @@ function deleteOldestDailyarchivesRemote() {
 
 	for folder in "${folders[@]}"
 	do
-		archive_date=$( echo $folder | gawk '{ print $3 }')
-		archive_id=$( echo $folder | gawk '{ print $1 }')
+		archive_date=$( echo $folder | awk '{ print $3 }')
+		archive_id=$( echo $folder | awk '{ print $1 }')
 	   	if [ $( daysBetween $DATE $archive_date ) -ge $MAX_DAYS_TO_KEEP ] ;then  
 			if gdriveDeleteFile $archive_id ; then
 				log "removing remote folder: \"$archive_date\" id=\"$archive_id\""
@@ -257,7 +251,7 @@ function deleteOldestDailyarchivesRemote() {
 
     sleep 60 # wait 60 seconds since qouta usage is not updated immediately after a deletion
     # check there is enough space for the next archive
-    estimated_archive_size=$(du -sb $ARCHIVE_DIR |gawk '{print $1}')
+    estimated_archive_size=$(du -sb $ARCHIVE_DIR |awk '{print $1}')
     available_space=$(showAvailableStorageQouta)
     archives_pending=$(( MAX_DAYS_TO_KEEP - (archive_count - deleted_count) ))
     estimated_space_required=$(( estimated_archive_size  * archives_pending ))
@@ -358,7 +352,8 @@ function gdriveDownloadFile() {
         --compressed \
         https://www.googleapis.com/drive/v3/files/${1}?alt=media
 
-        download_size=$(stat -c%s "$2")
+        # download_size=$(stat -c%s "$2") # not supported on mac
+        download_size=$(wc -c "$2" |awk '{print $1}' ) 
 
         download_size="${download_size:-0}"
         gdrive_size="${gdrive_size:-0}"
@@ -482,7 +477,7 @@ function showAvailableStorageQouta() {
 
 # $1 = estimated back up size $2 = available storage quota
 function checkAvailableStorageQuota() {
-    echo $1 |gawk '{
+    echo $1 |awk '{
     gb=1024*1024*1024
 
     if (avail > $1 )
@@ -512,7 +507,7 @@ function downloadRemoteArchiveFiles() {
     # get a list of the gzipped archives 
     # The array is indexed by file name and the value is the google fileid
     declare -A a="( $(gdriveListFiles $folder_id "${DATE}.*.gz.*$" application/gzip | awk '{ printf "[%s]=%s ", $3, $1  }') )"
-    
+
     # if the returned filenames have  *.gpg suffixes then they are encrypted
     if [[ "${!a[@]}" =~ $ENCRYPTED_FILE_SUFFIX ]]; then
         encrypted=true
@@ -733,7 +728,7 @@ echo "============================================" >>$LOG_FILE
 log $(printf "%s %s starting $SCRIPT")
 
 #
-# retrieve archive archives and then exit 
+# if in retrieve mode retrieve archive archives and then exit 
 #
 if [ "$MODE" == "retrieve" ] ; then
     log "downloading remote archive files"
@@ -745,9 +740,6 @@ if [ "$MODE" == "retrieve" ] ; then
     exit
 fi
 
-#
-# if the ghost config file is being restored from an archive, restore it before setting the ghost config vars
-#
 if [ "$MODE" == "restore" ] ; then
     if [ "$REMOTE" ]; then 
         log "downloading remote archive files"
@@ -756,6 +748,8 @@ if [ "$MODE" == "restore" ] ; then
         fi
     fi
 
+    # if in restore mode and the config file is included in the archives to be restored, the script assumes this is the config that should be used to find the location of the content and database.
+    # Restore the config file now so the config parameters are used to set the ghost config variables below
     if [[ "$ARCHIVE_OPTION" =~ all|config ]]; then
         decryptArchive "$CONFIG_ARCHIVE_FILE"
         if ! restoreConfigArchive ; then
@@ -767,21 +761,22 @@ if [ "$MODE" == "restore" ] ; then
 fi
 
 #
-# set ghost config variables
+# set ghost config variables if in restore or archive mode
 #
-if [ ! -r $GHOST_CONFIG_FILE ]; then
-    errorExit "Can't read ghost config file: $GHOST_CONFIG_FILE"
-fi
+if [[ "$MODE" =~ archive|restore ]]; then
+    if [ ! -r $GHOST_CONFIG_FILE ] if
+        errorExit "Can't read ghost config file: $GHOST_CONFIG_FILE"
+    fi
 
-GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)
-GHOST_CONTENT_DIR=${GHOST_CONTENT_DIR%/} # in case there is a trailing / then remove it
-if [[ $GHOST_CONTENT_DIR =~ ^[^/] ]];then # add root directory if content dir is relative
-    GHOST_CONTENT_DIR=${GHOST_ROOT_DIR}/$GHOST_CONTENT_DIR
-fi
+    GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)
+    GHOST_CONTENT_DIR=${GHOST_CONTENT_DIR%/} # in case there is a trailing / then remove it
+    if [[ $GHOST_CONTENT_DIR =~ ^[^/] ]];then # add root directory if content dir is relative
+        GHOST_CONTENT_DIR=${GHOST_ROOT_DIR}/$GHOST_CONTENT_DIR
+    fi
 
-
-if [ ! -w $ARCHIVE_ROOT_DIR ]; then # both restore and archive options need to be able to write to this directory
-    errorExit "Can't write to archive directory: $ARCHIVE_ROOT_DIR"
+    if [ ! -w $ARCHIVE_ROOT_DIR ]; then # both restore and archive options need to be able to write to this directory
+        errorExit "Can't write to archive directory: $ARCHIVE_ROOT_DIR"
+    fi
 fi
 
 #
@@ -814,107 +809,109 @@ fi
 #
 # create archives
 #
-if [ ! -d $ARCHIVE_DIR ]; then
-    if ! mkdir $ARCHIVE_DIR ; then
-        errorExit "can't create archive directory: $ARCHIVE_DIR"
-    fi
-fi
-
-echo "============================================" >>$LOG_FILE
-log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT starting"
-
-if [[ "$ARCHIVE_OPTION" =~ all|database ]];then
-    log "Creating database archive: $DATABASE_ARCHIVE_FILE"
-    if ! createDatabaseArchive ; then
-        errorExit "could not create database archive"
-    fi
-    if [ ! -z "$PASSPHRASE" ] ; then
-        log "encrypting $DATABASE_ARCHIVE_FILE"
-        gpg --symmetric --passphrase $PASSPHRASE --batch -o ${DATABASE_ARCHIVE_FILE}.gpg  $DATABASE_ARCHIVE_FILE && rm $DATABASE_ARCHIVE_FILE
-        if [ $? -ne 0 ]; then
-            errorExit "could not encrypt $DATABASE_ARCHIVE_FILE"
+if [ "$MODE" == "archive" ] ; then
+    if [ ! -d $ARCHIVE_DIR ]; then
+        if ! mkdir $ARCHIVE_DIR ; then
+            errorExit "can't create archive directory: $ARCHIVE_DIR"
         fi
     fi
-fi
 
-if [[ "$ARCHIVE_OPTION" =~ all|content ]];then
+    echo "============================================" >>$LOG_FILE
+    log "$(date '+%Y-%m-%d %H:%M:%S') $SCRIPT starting"
 
-    log "Creating content archive: $CONTENT_ARCHIVE_FILE"
-    if [ ! -d "$GHOST_CONTENT_DIR" ]; then
-        errorExit "Can't find ghost content directory: $GHOST_CONTENT_DIR"
-    fi
-    if ! createContentArchive ; then
-        errorExit "could not create content archive"
-    fi
-fi
-
-if [[ "$ARCHIVE_OPTION" =~ all|config ]];then
-    log "Creating config archive: $CONFIG_ARCHIVE_FILE"
-    if ! createConfigArchive ; then
-        errorExit "could not create config archive"
-    fi
-    if [ ! -z "$PASSPHRASE" ] ; then
-        log "encrypting $CONFIG_ARCHIVE_FILE"
-        gpg --symmetric --passphrase $PASSPHRASE --batch -o ${CONFIG_ARCHIVE_FILE}.gpg  $CONFIG_ARCHIVE_FILE && rm $CONFIG_ARCHIVE_FILE
-        if [ $? -ne 0 ]; then
-            errorExit "could not encrypt $CONFIG_ARCHIVE_FILE"
+    if [[ "$ARCHIVE_OPTION" =~ all|database ]];then
+        log "Creating database archive: $DATABASE_ARCHIVE_FILE"
+        if ! createDatabaseArchive ; then
+            errorExit "could not create database archive"
+        fi
+        if [ ! -z "$PASSPHRASE" ] ; then
+            log "encrypting $DATABASE_ARCHIVE_FILE"
+            gpg --symmetric --passphrase $PASSPHRASE --batch -o ${DATABASE_ARCHIVE_FILE}.gpg  $DATABASE_ARCHIVE_FILE && rm $DATABASE_ARCHIVE_FILE
+            if [ $? -ne 0 ]; then
+                errorExit "could not encrypt $DATABASE_ARCHIVE_FILE"
+            fi
         fi
     fi
-fi
 
-# remove old local files and exit 
-if [ ! "$REMOTE" ];then
-	log "removing local daily archives older than $MAX_DAYS_TO_KEEP days old"
-	deleteOldestDailyarchivesLocal
-	completionMessages 
+    if [[ "$ARCHIVE_OPTION" =~ all|content ]];then
 
-    exit # end of local back up process
-fi
+        log "Creating content archive: $CONTENT_ARCHIVE_FILE"
+        if [ ! -d "$GHOST_CONTENT_DIR" ]; then
+            errorExit "Can't find ghost content directory: $GHOST_CONTENT_DIR"
+        fi
+        if ! createContentArchive ; then
+            errorExit "could not create content archive"
+        fi
+    fi
 
-# remote storage
-log "starting remote storage processing"
-log "service account: $SERVICE_ACCOUNT_EMAIL"
+    if [[ "$ARCHIVE_OPTION" =~ all|config ]];then
+        log "Creating config archive: $CONFIG_ARCHIVE_FILE"
+        if ! createConfigArchive ; then
+            errorExit "could not create config archive"
+        fi
+        if [ ! -z "$PASSPHRASE" ] ; then
+            log "encrypting $CONFIG_ARCHIVE_FILE"
+            gpg --symmetric --passphrase $PASSPHRASE --batch -o ${CONFIG_ARCHIVE_FILE}.gpg  $CONFIG_ARCHIVE_FILE && rm $CONFIG_ARCHIVE_FILE
+            if [ $? -ne 0 ]; then
+                errorExit "could not encrypt $CONFIG_ARCHIVE_FILE"
+            fi
+        fi
+    fi
 
-if q=$(showAvailableStorageQouta) ; then
-    log "$(echo $q|gawk '{  printf("Storage quota avaialble: %.2f GiB\n",$1/1024/1024/1024) }')"
-else
-    errorExit "could not access the Google Drive API: $q"
-fi
+    # remove old local files and exit 
+    if [ ! "$REMOTE" ];then
+        log "removing local daily archives older than $MAX_DAYS_TO_KEEP days old"
+        deleteOldestDailyarchivesLocal
+        completionMessages 
 
-# attempt to remove any remote archive dir(s) with today's date in case of reruns
-ids="$(gdriveListFiles $REMOTE_ROOT_DIR_ID $DATE application/vnd.google-apps.folder  | awk '{print $1}' 2>/dev/null)"
-if [ ! -z "$ids" ];then
-    for i in ${ids[@]}; do
-        if gdriveDeleteFile $i ; then
-            log "existing \"$DATE\" folder  id=\"$i\" deleted"
+        exit # end of local back up process
+    fi
+
+    # remote storage
+    log "starting remote storage processing"
+    log "service account: $SERVICE_ACCOUNT_EMAIL"
+
+    if q=$(showAvailableStorageQouta) ; then
+        log "$(echo $q|awk '{  printf("Storage quota avaialble: %.2f GiB\n",$1/1024/1024/1024) }')"
+    else
+        errorExit "could not access the Google Drive API: $q"
+    fi
+
+    # attempt to remove any remote archive dir(s) with today's date in case of reruns
+    ids="$(gdriveListFiles $REMOTE_ROOT_DIR_ID $DATE application/vnd.google-apps.folder  | awk '{print $1}' 2>/dev/null)"
+    if [ ! -z "$ids" ];then
+        for i in ${ids[@]}; do
+            if gdriveDeleteFile $i ; then
+                log "existing \"$DATE\" folder  id=\"$i\" deleted"
+            else
+                log "WARNING: could not delete folder $i from archive root directory $REMOTE_ROOT_DIR_ID"
+                WARNING_FLAG=true
+            fi
+            done 
+    fi
+
+    log "removing remote daily archives older than $MAX_DAYS_TO_KEEP days old"
+    deleteOldestDailyarchivesRemote
+
+    # create a directory for today's archive files (YYYY-DD-MM)
+    if REMOTE_DIR_ID=$(gdriveCreateFolder "$REMOTE_ROOT_DIR_ID" "$DATE"); then
+        log "archive dir created, name=\"$DATE\", id=\"$REMOTE_DIR_ID\""
+    else	
+        errorExit "could not create archive dir $TODAY"
+    fi
+
+    # upload the archive files
+    readarray -t files < <(find $ARCHIVE_DIR -name '*.gz' -o -name '*.gpg' )
+    for i in "${files[@]}"
+    do
+        if UPLOAD_FILE_ID=$(gdriveUploadFile $i $REMOTE_DIR_ID application/gzip); then
+            log "$i uploaded, id=\"$UPLOAD_FILE_ID\""
         else
-            log "WARNING: could not delete folder $i from archive root directory $REMOTE_ROOT_DIR_ID"
-            WARNING_FLAG=true
+            errorExit "could not upload file $i to archive dir, id=\"$REMOTE_DIR_ID\""
         fi
-        done 
+    done
+
+    log "removing local archive files from $ARCHIVE_DIR"
+    rm -rf $ARCHIVE_DIR
+    completionMessages
 fi
-
-log "removing remote daily archives older than $MAX_DAYS_TO_KEEP days old"
-deleteOldestDailyarchivesRemote
-
-# create a directory for today's archive files (YYYY-DD-MM)
-if REMOTE_DIR_ID=$(gdriveCreateFolder "$REMOTE_ROOT_DIR_ID" "$DATE"); then
-	log "archive dir created, name=\"$DATE\", id=\"$REMOTE_DIR_ID\""
-else	
-	errorExit "could not create archive dir $TODAY"
-fi
-
-# upload the archive files
-readarray -t files < <(find $ARCHIVE_DIR -name '*.gz' -o -name '*.gpg' )
-for i in "${files[@]}"
-do
-	if UPLOAD_FILE_ID=$(gdriveUploadFile $i $REMOTE_DIR_ID application/gzip); then
-		log "$i uploaded, id=\"$UPLOAD_FILE_ID\""
-	else
-		errorExit "could not upload file $i to archive dir, id=\"$REMOTE_DIR_ID\""
-	fi
-done
-
-log "removing local archive files from $ARCHIVE_DIR"
-rm -rf $ARCHIVE_DIR
-completionMessages

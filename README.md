@@ -1,27 +1,23 @@
 
 # lightsail utils 
+
+[ghost-backup.sh](#ghost-backupsh) : 
+[backup](#backup-ghost) |
+[restore](#restore-ghost) |
+[remote storage](#remote-storage) |
+[dependencies](#dependencies)
+ 
+[lightsail-snapshot.sh](#lightsail-snapshotsh) :
+[usage](#usage) |
+[dependencies](#dependencies-1) | 
+[schedule a timer](#schedule-a-timer)
+
 utility scripts for [ghost](https://ghost.org/) websites deployed on a linux [AWS Lightsail](https://aws.amazon.com/lightsail/) instance.
 
 * ghost-backup.sh: Create a daily archive of the Ghost database, config files and content.  Backup archives can be kept on the server or stored remotely on Google Drive.
 * lightsail-snapshot.sh: Enable automatic daily snapshots of your AWS lightsail instance (this is an alternative to the AWS Lightsail _Automatic Snapshots_ feature, which is hard coded to retain 7 snapshots).
 
 
-- [ghost-backup.sh](#ghost-backupsh)
-  * [EXAMPLE - backup](#example---backup-ghost)
-  * [EXAMPLE - restore](#example---restore-ghost)
-  * [Remote storage - service accounts](#remote-storage---service-accounts)
-    + [service account storage](#service-account-storage)
-    + [authentication](#authentication)
-    + [authorisation](#authorisation)
-    + [protecting your account](#protecting-your-account)
-    + [dependencies](#dependencies)
-- [lightsail-snapshot.sh](#lightsail-snapshotsh)
-  * [EXAMPLE](#example-1)
-  * [Dependencies](#dependencies)
-- [Schedule a timer to run the script](#schedule-a-timer-to-run-the-script)
-
-
- 
 ***
 # ghost-backup.sh
 
@@ -31,9 +27,7 @@ The script creates 3 gzip archives and places them in a subdirectory named YYYY-
 2021-02-19/2021-02-19-content.tar.gz # content (themses, images etc)
 2021-02-10/2021-02-19-config.gz # Ghost config file
 ```
-the script deletes the oldest archive directories up to the specified maximum number of retained snapshots.  
-
-See usage statement for more details.
+The oldest archive directories up to the specified maximum number of retained archives will be deleted.
 
 note the backup contains account credtentials:
 * the ghost config file (config.production.json) is included and this contains the Ghost database access credentials in plain text.
@@ -41,32 +35,40 @@ note the backup contains account credtentials:
 
 There is an option to encrypt the config and database archives if you are going to keep them in a remote location.
 
+## backup Ghosexample usage:
+To backup a Ghost site that was installed in /var/www/ghost and copy the archives to a google drive folder:
 
-## EXAMPLE - backup Ghost
-backup a ghost installation installed in /var/www/ghost and copy the archives to a google drive folder. A maximum of 7 archives will be kept
+```sh
+ghost-backup.sh -m archive -l ghost.log -a /data/archives/ghost -g /var/www/ghost -k 7 -o all -r -G 1v3ab123_JZ1f_yGP9l6Fed89QSbtyw -C project123-f712345a860a.json
 ```
-ghost-backup.sh -w /var/www/ghost -l wp.log -b /data/backups/ghost -m 7 -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -f ghost-backup@example.com -t example@mail.com -a LightsailAdmin
+the archive files are initially created in the working directory specified with -a and are deleted after they are copied remotely ). Take maximum number of archives specified with -k  archives will be kept
 
+To archive ghost files to the local directory specified with -a and send an email after the script completes
+
+```sh
+ghost-backup.sh -m archive -l ghost.log -a /data/archives/ghost -g /var/www/ghost -k7 -o all -f backup@example.com -t staff@example.com -A aws_ses_profile
 ```
-## EXAMPLE - restore Ghost
-restore the config, database and content archives from /data/backups/ghost/2021-02-01
+
+## restore Ghost
+restore the config, content and database archives from 1st February 2022 
+
+```sh
+ghost-backup.sh -m restore -l ghost.log -g /var/www/ghost -a /data/archives/ghost -d 2022-02-01 -o all
 ```
-ghost-backup.sh -w /var/www/ghost -l wp.log -b /data/backups/ghost -R 2021-02-01 -o all
 
-```
-when using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified google drive first
+Note that any existing database and filesytem data for the ghost installation specified with the -g option will be overwritten by the content of the archives.
 
+When using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified google drive first
 
-## Remote storage - service accounts
+## Remote storage
 The remote storage option will upload the backup archives to Google Drive using a [service account](https://cloud.google.com/iam/docs/service-accounts).  Service account are created in the API section of the [Google Developer Console](https://console.developers.google.com/apis) and are identified by an email address e.g example@project-id.iam.gserviceaccount.com.  These accounts have their own storage quota on Google Drive (as of early 2021, the quota is 15 GiB).
 
 limitations:
 1. Service accounts can only access Google Drive files that they own  
-1. The service account's Google Drive storage quota can't be increased
-1. Service accounts can't login via a browser 
+1. The service account's Google Drive storage quota can't be increased 
 
 ### service account storage
-Consequently the only way to manage a service account's Google Drive data is via the [Google Drive API](https://developers.google.com/drive/api/v3/about-sdk).  
+Service accounts can't login via a browser so the only way to manage their Google Drive data is via the [Google Drive API](https://developers.google.com/drive/api/v3/about-sdk).  
 
 However, it is still possible to view the Google Drive data created by service accounts in a user account's Google Drive by uploading to a folder that was created by the user account and then shared with the service account (you can specify a shared folder id as a parameter to the script).
 
@@ -88,15 +90,15 @@ The backup script creates a JWT _request token_ that is sent to Google's Oauth 2
 
 The service account can also be used to access Google Cloud Platform (GCP) services and you therefore need to specify (or create) a GCP [IAM role](https://cloud.google.com/iam/docs/understanding-roles) when you create the account.  It is good practice to limit access to the minimum set of resources needed by an account to do its work, however, since Google Drive is part of Google Workspace and not GCP, there are no IAM permissions that apply to the Google Drive API.  There is no obvious way to prevent service accounts created solely for Google Drive access from also being used to access GCP services other than by creating a profile with an impossible to fulfil set of conditions.
 
+
 ### protecting your account 
 Although the service account can't access your personal user data, anyone in possession of the service account's private key can access all the GCP resources allowed by the profile assigned to it - potentially allowing them to rack up unwanted bills - and of course they will also be able to access your backups.  You should learn about keeping your keys safe.
 
-### dependencies
+## dependencies
 **curl** is used to access the Google Drive REST API
 
-The script uses various linux utilities that will be found on any modern linux distro (it was developed on unbuntu 20.04)
-
-the script has been tested with a Ghost instance using **mysql**.  The database extract is done with **mysqldump**.
+The script uses various linux utilities that will be found on any modern linux distro (it was developed on unbuntu 22.
+The database extract is done with **mysqldump**.
 
 **jq** is used to parse the json returned by the Google APIs.  If jq is not available for your distribution you can find installation instructions on the [github project](https://stedolan.github.io/jq/)
 
@@ -107,12 +109,17 @@ To use this option you need to configure [AWS SES mail](https://aws.amazon.com/s
 
 The email is sent using the [aws command line interface](https://aws.amazon.com/cli "aws cli") and you must supply a [named aws cli profile](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html) at runtime.  The IAM account associated with the profile will need ses:SendEmail permission.
 
+Ghost developer mode:
+there is rudimentary support for MacOS installs (you can retrieve remote archives and restore the content directory).  You meed to be running a modern version of bash and gawk to use it.
+
 ***
 # lightsail-snapshot.sh
 this script creates a new lightsail instance snapshot and deletes the oldest snapshots up to the specified maximum number of retained snapshots.  See the usage statement for options.
 
-## EXAMPLE
-`lightsail-snapshot.sh -l /var/log/lightsail-snapshot/lightsail-snapshot.log -m 2 -b "Ubuntu-1GB-London-1-Auto" -i "Ubuntu-1GB-London-1" -a Admin`
+## Usage
+```sh
+lightsail-snapshot.sh -l /var/log/lightsail-snapshot/lightsail-snapshot.log -m 2 -b "Ubuntu-1GB-London-1-Auto" -i "Ubuntu-1GB-London-1" -a Admin
+```
 
 ## Dependencies
 this script uses the [aws command line interface](https://aws.amazon.com/cli "aws cli") to manage lightsail instance snapshots.
@@ -131,12 +138,12 @@ email notifications:
 
 You need to configure AWS [SES](https://aws.amazon.com/ses/pricing/ "AWS SES pricing + free tier") mail if you want to use the email notification option. The IAM account will need ses:SendEmail permission.  
 
-# Schedule a timer to run the script 
+# Schedule a timer
 You can schedule the scripts to run using systemd (these instructions show how to do this for lightsail-snapshot.sh and work for Ubunty 20.04).
 
 1. create lightsail-lighthouse service unit file:  /etc/systemd/system/lightsail-snapshot.service:
 
-```
+```systemctl
 [Unit]
 Description=Service for lightsail-snapshot application
 
@@ -148,11 +155,10 @@ Restart=no
 WorkingDirectory=/tmp
 TimeoutStopSec=30
 Type=oneshot
-
 ```
 
 2. create a timer unit file: /etc/systemd/system/lightsail-snapshot.timer
-```
+```systemctl
 [Unit]
 Description=Timer for lightsail-snapshot.sh (AWS lightsail snapshot management)
 
@@ -171,18 +177,18 @@ The systemd configuration above results in a new snapshot being created on the f
 
 enable the timer
 
-```
+```sh
 sudo systemctl enable lightsail-snapshot.timer
 ```
 
 test the service runs:
-```
+```sh
 sudo systemctl start lightsail-snapshot.timer
 sudo systemctl start lightsail-snapshot.service
 ```
 
 check status:
-```
+```sh
 systemctl status lightsail-snapshot.service
 systemctl status lightsail-snapshot.timer
 ```

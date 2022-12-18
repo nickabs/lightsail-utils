@@ -11,20 +11,21 @@ function usage() {
         [ -g ghost dir ] (archive|restore mode: ghost installation directory containing ghost config file)
         [ -k keep days ] (archive mode: maximum number of daily archives to keep)
         [ -r -G google drive id -C credential config file for google service account] (remote storage options)
-        [ -d YYYY-MM-DD ] (retrive|restore date)
+        [ -d YYYY-MM-DD ] (retrieve|restore date)
         [ -s (silent) ]
         [ -p passphrase ] (when specified this will be used as a key to encrypt the database and config archives )  
         [ -f email from -t email to -A aws profile name ] (send email using Amazon SES on completion)
+        [ -x ] (local development installation)
 
         EXAMPLE
 
         1. archive ghost files and copy the archive to remote storage (when specifying remote storage the archives are managed in the specified google drive and the local archive files are deleted)
 
-        $SCRIPT -m archive -l ghost.log -a /data/archives/ghost -g /var/www/ghost -k 7 -o all -r remote -G 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -C project123-f712345a860a.json
+        $SCRIPT -m archive -l ghost.log -a /data/archives/ghost -g /var/www/ghost -k 7 -o all -r -G 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -C project123-f712345a860a.json
 
         2. archive ghost files to the local directory specified with -a and send an email after the script completes
 
-        $SCRIPT -m archive -l ghost.log -a /data/archives/ghost -g /var/www/ghost -k7 -o all -r local -f lightsail-snapshot@example.com -t example@mail.com -A LightsailSnapshotAdmin
+        $SCRIPT -m archive -l ghost.log -a /data/archives/ghost -g /var/www/ghost -k7 -o all -r -f backup@example.com -t staff@example.com -A aws_ses_profile
 
         3. restore the config, content and database archives from 1st February 2022 
         $SCRIPT -m restore -l ghost.log -g /var/www/ghost -l -a /data/archives/ghost -d 2022-02-01 -o all
@@ -38,6 +39,16 @@ function usage() {
 }
 
 function checkOptions() {
+
+    if [ "$DEV_INSTALL" ] && [ "$MODE" == "archive" ]; then
+        echo -e "ERROR: archive mode can't be used on development installations"
+        return 1
+    fi
+
+    if [ "$DEV_INSTALL" ] && [ "$MODE" == "restore" ] && [[ "$ARCHIVE_OPTION" =~ all|database ]]; then
+        echo -e "ERROR: can't restore database or config files on development installations"
+        return 1
+    fi
 
     if ! [[ "$MODE" =~ ^archive$|^restore$|^retrieve$ ]]; then
         echo -e "ERROR: you must specify either archive, restore or retrieve with the mode (-m) option"
@@ -97,8 +108,8 @@ function checkOptions() {
     fi
 
 	if [  "$FROM_EMAIL" ] || [ "$TO_EMAIL" ]; then
-        if [ ! "$MODE" == "restore" ];then
-			echo -e "ERROR: email notifications not available when restoring data\n" >&2
+        if [ "$MODE" != "archive" ];then
+			echo -e "ERROR: email notifications are only available when archiving data\n" >&2
 			return 1
 		fi
 
@@ -170,6 +181,7 @@ function daysBetween() {
 	echo $((s/86400))
 }
 
+# the datbase functions only work on mysql installations
 function createDatabaseArchive() {
 
     local_client=$(jq -r '.database.client' $GHOST_CONFIG_FILE)
@@ -217,7 +229,6 @@ function deleteOldestDailyarchivesLocal() {
 	   	fi
 	done
 }
-
 
 # to maximise the use of space in the remote storage location the script will remove old archives before the new one is copied
 function deleteOldestDailyarchivesRemote() {
@@ -411,17 +422,24 @@ function gdriveListFiles() {
 }
 
 # returns true if http error code found in response and prints error message to STDERR
+# note that standard errors like "out of space" are returned by google as json, server errors are html
 function gdriveCheckForErrors() {
-	local e=$(jq -r '"\(.error.code)"+" "+.error.message')
+    local response=$(cat -)
+    local e
+    
+    e=$(echo $response | gawk '/<html>/ { print gensub(/.*<title>(.*)<\/title>.*/,"gdrive error: \\1","g") }')
+    if [ -z "$e" ] || [[ "$e" =~ ^null ]]; then
+        local e=$(jq -r '"\(.error.code)"+" "+.error.message')
+    fi
 
-	if [ -z "$e" ] || [[ "$e" =~ ^null ]]; then
-		return  1 # no error found
-	else
-		echo $e >&2 # redirected to log
+    if [ -z "$e" ] || [[ "$e" =~ ^null ]]; then
+        return  1 # no error found
+    else
+        echo $e >&2 # redirected to log
         if [ ! "$SILENT" ]; then
-		    echo $e # show on screen
+            echo $e # show on screen
         fi
-	fi
+    fi
 }
 
 function gdriveUploadFile() {
@@ -641,14 +659,19 @@ function restoreContentArchive() {
         fi
         
     fi
-    tar xf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR --same-owner
+    if [ "$DEV_INSTALL" ]; then
+        log "development installation: note that the themes, logs and data directories are not restored when restoring to a local development installation"
+        tar xf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR --exclude ./themes --exclude ./data --exclude ./logs
+    else
+        tar xf $CONTENT_ARCHIVE_FILE --directory $GHOST_CONTENT_DIR --same-owner
+    fi
 }
 
 #
 # main
 #
 export SCRIPT=$(basename $0)
-while getopts "rsm:l:k:a:g:G:C:f:t:A:p:d:o:" o; do
+while getopts "xrsm:l:k:a:g:G:C:f:t:A:p:d:o:" o; do
         case "$o" in
         m) export MODE=$OPTARG ;; 
         l) export LOG_FILE=$OPTARG ;; 
@@ -665,6 +688,7 @@ while getopts "rsm:l:k:a:g:G:C:f:t:A:p:d:o:" o; do
         s) export SILENT=true ;; # disable screen output
         o) export ARCHIVE_OPTION=$OPTARG ;;
         d) export ARCHIVE_DATE=$OPTARG ;;
+        x) export DEV_INSTALL=true;;
         *) usage ;;
         esac
 done
@@ -695,19 +719,26 @@ export AT # google auth token
 export WARNING_FLAG # when true send warning email about non critical errors
 export SILENT
 export ENCRYPTED_FILE_SUFFIX=".gpg"
+export DATE
 
-# working directory for archive files - when restoring use the date specified on the command line
+# working directory for archive files - when restoring|retrieving use the date specified on the command line
 if [ "$ARCHIVE_DATE" ];then
     DATE=$ARCHIVE_DATE
 else
     DATE=$(date '+%Y-%m-%d') 
 fi
 
-ARCHIVE_DIR=${ARCHIVE_ROOT_DIR}/${DATE}
-DATABASE_ARCHIVE_FILE=$ARCHIVE_DIR/${DATE}-database.sql.gz 
-CONTENT_ARCHIVE_FILE=$ARCHIVE_DIR/${DATE}-content.tar.gz 
-CONFIG_ARCHIVE_FILE=$ARCHIVE_DIR/${DATE}-json.tar.gz 
-GHOST_CONFIG_FILE="${GHOST_ROOT_DIR}/config.production.json"
+export ARCHIVE_DIR=${ARCHIVE_ROOT_DIR}/${DATE}
+export DATABASE_ARCHIVE_FILE=$ARCHIVE_DIR/${DATE}-database.sql.gz 
+export CONTENT_ARCHIVE_FILE=$ARCHIVE_DIR/${DATE}-content.tar.gz 
+export CONFIG_ARCHIVE_FILE=$ARCHIVE_DIR/${DATE}-json.tar.gz 
+export GHOST_CONFIG_FILE
+
+if [ "$DEV_INSTALL" ]; then
+    GHOST_CONFIG_FILE="${GHOST_ROOT_DIR}/config.development.json"
+else
+    GHOST_CONFIG_FILE="${GHOST_ROOT_DIR}/config.production.json"
+fi
 
 # get credentials for remote storage
 if [ "$REMOTE" ]; then
@@ -724,31 +755,34 @@ if [ "$REMOTE" ]; then
 	fi
 fi
 
+
 echo "============================================" >>$LOG_FILE
 log $(printf "%s %s starting $SCRIPT")
 
 #
-# if in retrieve mode retrieve archive archives and then exit 
+# download archives from remote location 
 #
-if [ "$MODE" == "retrieve" ] ; then
+if [[ "$MODE" =~ retrieve|restore ]] && [ "$REMOTE" ] ; then
     log "downloading remote archive files"
     if  ! downloadRemoteArchiveFiles ; then
         errorExit "Could not download remote archive files"
     fi
 
     log "download complete"
-    exit
+
+    # exit if in retrieve mode
+    if [ "$MODE" == "retrieve" ]; then 
+        exit
+    fi
 fi
 
-if [ "$MODE" == "restore" ] ; then
-    if [ "$REMOTE" ]; then 
-        log "downloading remote archive files"
-        if  ! downloadRemoteArchiveFiles ; then
-            errorExit "Could not download remote archive files"
-        fi
-    fi
+#
+# get the ghost config file (contains the database credentials and location of content dir
+#
+if [ "$MODE" == "restore" ]; then
 
-    # if in restore mode and the config file is included in the archives to be restored, the script assumes this is the config that should be used to find the location of the content and database.
+    # if in restore mode and the config file is included in the archives to be restored,
+    # the script assumes this is the config that should be used to find the location of the content and database.
     # Restore the config file now so the config parameters are used to set the ghost config variables below
     if [[ "$ARCHIVE_OPTION" =~ all|config ]]; then
         decryptArchive "$CONFIG_ARCHIVE_FILE"
@@ -758,29 +792,26 @@ if [ "$MODE" == "restore" ] ; then
             log "config archive restored"
         fi
     fi
+
+    if [ ! -r "$GHOST_CONFIG_FILE" ];then
+        errorExit "Can't find ghost config: $GHOST_CONFIG_FILE"
+    fi
 fi
 
-#
-# set ghost config variables if in restore or archive mode
-#
-if [[ "$MODE" =~ archive|restore ]]; then
-    if [ ! -r $GHOST_CONFIG_FILE ] if
-        errorExit "Can't read ghost config file: $GHOST_CONFIG_FILE"
-    fi
+# get the location of the content directory and database credentials from config
+GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)
+GHOST_CONTENT_DIR=${GHOST_CONTENT_DIR%/} # in case there is a trailing / then remove it
+if [[ $GHOST_CONTENT_DIR =~ ^[^/] ]];then # add root directory if content dir is relative
+    GHOST_CONTENT_DIR=${GHOST_ROOT_DIR}/$GHOST_CONTENT_DIR
+fi
 
-    GHOST_CONTENT_DIR=$(jq -r ".paths.contentPath" < $GHOST_CONFIG_FILE)
-    GHOST_CONTENT_DIR=${GHOST_CONTENT_DIR%/} # in case there is a trailing / then remove it
-    if [[ $GHOST_CONTENT_DIR =~ ^[^/] ]];then # add root directory if content dir is relative
-        GHOST_CONTENT_DIR=${GHOST_ROOT_DIR}/$GHOST_CONTENT_DIR
-    fi
-
-    if [ ! -w $ARCHIVE_ROOT_DIR ]; then # both restore and archive options need to be able to write to this directory
-        errorExit "Can't write to archive directory: $ARCHIVE_ROOT_DIR"
-    fi
+if [ ! -w $ARCHIVE_ROOT_DIR ]; then # both restore and archive options need to be able to write to this directory
+    errorExit "Can't write to archive directory: $ARCHIVE_ROOT_DIR"
 fi
 
 #
 # if restoring, restore from archive and then exit
+# if the config file was requested it was already restored above
 #
 if [ "$MODE" == "restore" ] ; then
     log "Restoring ghost archive: $ARCHIVE_DATE"
@@ -912,6 +943,7 @@ if [ "$MODE" == "archive" ] ; then
     done
 
     log "removing local archive files from $ARCHIVE_DIR"
+
     rm -rf $ARCHIVE_DIR
     completionMessages
 fi

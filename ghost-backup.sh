@@ -130,6 +130,18 @@ function checkOptions() {
     fi
 }
 
+function checkDependencies() {
+    if ! hash jq 2>/dev/null ; then
+        errorExit "this script needs jq to run"
+    fi
+    if ! hash gawk 2>/dev/null ; then
+        errorExit "this script needs gawk to run"
+    fi
+    if [ "${BASH_VERSINFO:-0}" -lt 4 ]; then
+        errorExit "this script needs bash v4 or later to run"
+    fi
+}
+
 function isRoot() {
 	if [ "$(whoami)" != 'root' ]; then
 		return 1
@@ -701,6 +713,8 @@ if ! checkOptions ; then
     usage
 fi
 
+checkDependencies
+
 if ! isRoot ;then
     errorExit "this script must be run as root"
 fi
@@ -754,7 +768,6 @@ if [ "$REMOTE" ]; then
 		errorExit "could not get access token"
 	fi
 fi
-
 
 echo "============================================" >>$LOG_FILE
 log $(printf "%s %s starting $SCRIPT")

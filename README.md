@@ -35,22 +35,22 @@ note the backup contains account credtentials:
 
 There is an option to encrypt the config and database archives if you are going to keep them in a remote location.
 
-## backup Ghosexample usage:
-To backup a Ghost site that was installed in /var/www/ghost and copy the archives to a google drive folder:
+## backup Ghost
+Example: backup a Ghost site installed in /var/www/ghost and copy the archives to a google drive folder:
 
 ```sh
 ghost-backup.sh -m archive -l ghost.log -a /data/archives/ghost -g /var/www/ghost -k 7 -o all -r -G 1v3ab123_JZ1f_yGP9l6Fed89QSbtyw -C project123-f712345a860a.json
 ```
-the archive files are initially created in the working directory specified with -a and are deleted after they are copied remotely ). Take maximum number of archives specified with -k  archives will be kept
+the archive files are created in the working directory specified with -a (these files are deleted after they are copied remotely). The -k option specifies the maximum number of archives that should be kept.
 
-To archive ghost files to the local directory specified with -a and send an email after the script completes
+This command will create an archive in the local directory specified with -a and sends an email after the script completes:
 
 ```sh
 ghost-backup.sh -m archive -l ghost.log -a /data/archives/ghost -g /var/www/ghost -k7 -o all -f backup@example.com -t staff@example.com -A aws_ses_profile
 ```
 
 ## restore Ghost
-restore the config, content and database archives from 1st February 2022 
+Example: to restore the config, content and database archives from 1st February 2022 
 
 ```sh
 ghost-backup.sh -m restore -l ghost.log -g /var/www/ghost -a /data/archives/ghost -d 2022-02-01 -o all
@@ -58,7 +58,7 @@ ghost-backup.sh -m restore -l ghost.log -g /var/www/ghost -a /data/archives/ghos
 
 Note that any existing database and filesytem data for the ghost installation specified with the -g option will be overwritten by the content of the archives.
 
-When using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified google drive first
+When using the restore option with the remote storage options (see backup example) the archive files will be retrieved from the specified Google drive first.
 
 ## Remote storage
 The remote storage option will upload the backup archives to Google Drive using a [service account](https://cloud.google.com/iam/docs/service-accounts).  Service account are created in the API section of the [Google Developer Console](https://console.developers.google.com/apis) and are identified by an email address e.g example@project-id.iam.gserviceaccount.com.  These accounts have their own storage quota on Google Drive (as of early 2021, the quota is 15 GiB).

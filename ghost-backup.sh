@@ -31,7 +31,7 @@ function usage() {
         $SCRIPT -m restore -l ghost.log -g /var/www/ghost -l -a /data/archives/ghost -d 2022-02-01 -o all
 
         4. retrieve the remote archive archives from 1st February 2022 but do not restore them (the archives are retrieved to the directory specified with -a)
-        $SCRIPT -m retrieve -l ghost.log -a /data/archives/ghost -r -g 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -c project123-f712345a860a.json -d 2022-02-01 -o all
+        $SCRIPT -m retrieve -l ghost.log -a /data/archives/ghost -r -G 1v3ab123_ddJZ1f_yGP9l6Fed89QSbtyw -C project123-f712345a860a.json -d 2022-02-01 -o all
 
         see https://github.com/nickabs/lightsail-utils for more information
         " 1>&2

@@ -441,7 +441,7 @@ function gdriveCheckForErrors() {
     
     e=$(echo $response | gawk '/<html>/ { print gensub(/.*<title>(.*)<\/title>.*/,"gdrive error: \\1","g") }')
     if [ -z "$e" ] || [[ "$e" =~ ^null ]]; then
-        local e=$(jq -r '"\(.error.code)"+" "+.error.message')
+        local e=$(echo $response|jq -r '"\(.error.code)"+" "+.error.message')
     fi
 
     if [ -z "$e" ] || [[ "$e" =~ ^null ]]; then

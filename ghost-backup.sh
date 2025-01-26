@@ -158,6 +158,9 @@ function log() {
 function errorExit() {
 	local exit_status=$?
 	log "$SCRIPT: ERROR: $@ "
+    log "removing temporary archive files from $ARCHIVE_DIR"
+    rm -rf $ARCHIVE_DIR
+
 	if [ "$EMAIL" ];then
         local msg="$SCRIPT: ERROR: $@"
 		if ! email "$msg";then
